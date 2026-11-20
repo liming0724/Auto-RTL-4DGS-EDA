@@ -1,0 +1,63 @@
+# Local credentials and configuration — never commit
+# agent.py reads GCP project ID / Gemini settings from config.yaml
+config.yaml
+config.yml
+*.yaml.local
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*credentials*
+*service-account*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+*.log
+output.log
+
+# Compiled C++ extension and build outputs
+*.so
+*.o
+*.a
+build/
+dist/
+
+# Simulation and waveform dumps (see DEVIN.md §4)
+*.vcd
+*.fst
+*.fsdb
+*.vpd
+*.shm/
+simv*
+sim_ssim
+csrc/
+nWaveLog/
+novas*
+*.wlf
+*.db
+work/
+obj_dir/
+
+# EDA tool artifacts
+*.syn
+*.mapped
+*.sdf
+*.spef
+yosys.log
+abc.log
+*.blif
+*.aig
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~
