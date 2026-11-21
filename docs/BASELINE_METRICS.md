@@ -19,10 +19,43 @@ Verilator, Yosys (with ABC), and [sv2v 0.0.12][sv2v]. Ubuntu 24.04 works with
 The default ABC is the first of `berkeley-abc`, `abc`, and `yosys-abc` available.
 All generated files stay in the ignored `build/baseline/` directory.
 
-The measurements below use Verilator 4.038, Yosys 0.23, Berkeley ABC 1.01
-(2022-01-29 build), sv2v 0.0.12, and GCC 11.4.0. The complete flow also passed
-with the CI toolchain: Verilator 5.020, Yosys 0.33, Yosys-bundled ABC 1.01
-(2024-04-01 build), and GCC 13.3.0. Mapping counts can vary across versions.
+### Toolchain used for the reported measurements
+
+The measurements below were made on Ubuntu 22.04 (Jammy, x86-64) using the
+**Debian amd64 Yosys package `0.23-6`** (git `7ce5011c24b`), extracted locally.
+It was Jammy's `0.9-2` package, not Yosys 0.23, that failed to parse the GS RTL.
+The measured run paired Yosys 0.23 with Jammy's Berkeley ABC
+`1.01+20211229git48498af+dfsg-2` (2022-01-29 build), Verilator 4.038,
+sv2v 0.0.12, and GCC 11.4.0.
+
+On Jammy, install `make g++ python3 verilator berkeley-abc curl unzip` and the
+Yosys runtime libraries `libffi8 libreadline8 libtcl8.6` with apt, then run the
+following from the repository root. The checksum-verified tools stay in the
+ignored build directory and do not replace system Yosys.
+
+```sh
+(
+  set -eu
+  tools="$PWD/build/baseline/tools"
+  mkdir -p "$tools"
+  cd "$tools"
+  curl -fsSLo yosys.deb https://deb.debian.org/debian/pool/main/y/yosys/yosys_0.23-6_amd64.deb
+  curl -fsSLo sv2v.zip https://github.com/zachjs/sv2v/releases/download/v0.0.12/sv2v-Linux.zip
+  sha256sum -c <<'EOF'
+00cb3419d9c2e8964e588cbfa8a46b8d0ff4b391083a53a82d49ec1c2766330b  yosys.deb
+ff8c9eea5bc029b372fb4953427625cddb7cf7e58c1240623ac9f260818d5a00  sv2v.zip
+EOF
+  dpkg-deb -x yosys.deb yosys
+  unzip -oq sv2v.zip
+  cd - >/dev/null
+  make -j2 cec_baseline YOSYS="$tools/yosys/usr/bin/yosys" \
+    SV2V="$tools/sv2v-Linux/sv2v" ABC=/usr/bin/berkeley-abc
+)
+```
+
+CI verifies the same flow on Ubuntu 24.04 with Verilator 5.020, Yosys 0.33,
+Yosys-bundled ABC 1.01 (2024-04-01 build), and GCC 13.3.0; it is not the
+source of the table below. Mapping counts can vary across tool versions.
 
 [sv2v]: https://github.com/zachjs/sv2v/releases/tag/v0.0.12
 
@@ -54,12 +87,13 @@ incomplete case. Other warnings remain fatal.
 - GS inlines two combinational temporary flags that were only read immediately
   after assignment within the same branch. No latch value was consumed.
 - The GS simulation-only float/int models use equivalent explicit integer
-  conversions for Verilator 4/5 compatibility.
+  conversions for Verilator 4/5 compatibility. The integer-to-float substitute
+  rejects input widths above 24 bits at simulation startup.
 
 | Test | Clock cycles | Checks | Result |
 | --- | ---: | --- | --- |
 | `sim_ssim` | 10,000 | 6,800 packed binary16 scores and 6,800 nine-tap windows | Pass, 0 mismatches |
-| `sim_gs` | 432,919 total; 431,792 for the checked frame | 2,550 bit-exact pixels and 2,551 cycle-exact write strobes | Pass, 0 mismatches |
+| `sim_gs` | 432,919 total; 431,792 for the checked frame | 2,550 bit-exact pixels and 2,551 cycle-exact, address-checked write strobes | Pass, 0 mismatches |
 
 SSIM repeats the checked-in `gt.txt` / `img.txt` frame through the actual input
 SRAMs. The test checks output-valid every cycle. A separate shift-window
@@ -87,9 +121,11 @@ sed -nE '/^\[SSIM OUTPUT\]/s/.* raw=([[:xdigit:]]+).*/\1/p' "$out/ssim_icarus.lo
 
 GS uses a deterministic synthetic scene (seed 1, 600 active Gaussians in 1,089
 slots) and the cycle-accurate C++ reference. The top does not expose ready/valid
-ports; the test checks the actual interface: reset and restart, write-enable
-timing (first write at frame cycle 1,103), addresses and payloads, and terminal
-`Finish` behavior. The legacy terminal strobe has no additional pixel payload.
+ports; the test checks reset and restart, write timing (first write at frame
+cycle 1,103), pixel payloads, and `Finish`. A simulation-only wrapper observes
+write enable and address at the output SRAM inputs. The test expects consecutive
+addresses 0–2,549, followed by the legacy terminal strobe at 2,550 with no
+additional pixel payload.
 
 Both simulations use clean-room substitutes, not real DesignWare. SSIM's fixture
 is a regression baseline for this stimulus and model, not an independent SSIM

@@ -1,7 +1,7 @@
 #include <cstdio>
 #include <stdexcept>
 
-#include "VGS_RASTERIZER_pipeline.h"
+#include "Vgs_sim_top.h"
 #include "gs4d/scene.hpp"
 #include "verilated.h"
 
@@ -28,7 +28,7 @@ static int run() {
     check(expected.write_cycles.size() == expected.pixels.size() + 1,
           "reference must include the legacy terminal write strobe", 0);
 
-    VGS_RASTERIZER_pipeline dut;
+    Vgs_sim_top dut;
     uint64_t clocks = 0;
     auto tick = [&] {
         dut.clk = 1;
@@ -41,7 +41,8 @@ static int run() {
         dut.rst_n = 0;
         for (int i = 0; i < 4; ++i) {
             tick();
-            check(!dut.en && !dut.Finish && dut.N == 0, "reset outputs", clocks);
+            check(!dut.en && !dut.write_enable && !dut.Finish && dut.N == 0,
+                  "reset outputs", clocks);
         }
         dut.rst_n = 1;
         dut.eval();
@@ -63,7 +64,9 @@ static int run() {
         const bool expect_write =
             writes < expected.write_cycles.size() && cycle == expected.write_cycles[writes];
         check(dut.en == expect_write, "write strobe differs from C++ reference", clocks);
-        if (dut.en) {
+        check(dut.write_enable == expect_write, "output SRAM write enable differs from C++ reference", clocks);
+        if (dut.write_enable) {
+            check(dut.write_addr == writes, "output SRAM address differs from expected write index", clocks);
             if (writes < expected.pixels.size()) {
                 const auto& pixel = expected.pixels[writes];
                 if (dut.RGB != pixel.rgb || dut.D != fp.to_bits(pixel.depth) ||
@@ -83,11 +86,12 @@ static int run() {
     check(writes == expected.write_cycles.size(), "missing frame write strobes", clocks);
     for (int idle = 0; idle < 16; ++idle) {
         tick();
-        check(dut.Finish && !dut.en, "COMPLETE must hold without further writes", clocks);
+        check(dut.Finish && !dut.en && !dut.write_enable,
+              "COMPLETE must hold without further writes", clocks);
     }
     dut.final();
     std::printf("GS PASS: %llu total cycles, %llu frame cycles, %zu bit-exact pixels, "
-                "%zu write strobes, first write at cycle %llu, 0 mismatches\n",
+                "%zu address-checked write strobes, first write at cycle %llu, 0 mismatches\n",
                 static_cast<unsigned long long>(clocks), static_cast<unsigned long long>(cycle),
                 expected.pixels.size(), writes, static_cast<unsigned long long>(first_write));
     return 0;
