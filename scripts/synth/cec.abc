@@ -1,0 +1,2 @@
+cec -T 60 pre.blif mapped.blif
+cec -T 60 pre.blif optimized.blif

@@ -1,0 +1,2 @@
+# Preserve and accept the legacy CRLF line endings in this RTL source.
+rtl_baseline/gs_rasterizer/GS_RASTERIZER_pipeline.v -text whitespace=cr-at-eol

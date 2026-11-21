@@ -319,7 +319,6 @@ module GS_RASTERIZER_pipeline (
     end
 
     // ============ INIT_PIXEL and pixel update logic (combinational) ============
-    logic cd_zero_s9, cd_zero_s10;
     logic [31:0] s10_r, s10_g, s10_b, s10_d;
 
     always_comb begin
@@ -335,16 +334,14 @@ module GS_RASTERIZER_pipeline (
         end else if (state == PROCESS) begin
             // Stage 9: 更新 transmittance (提前更新!)
             if (stage_valid_9) begin
-                cd_zero_s9 = (alpha_too_small_s9 || beta_positive_2_s9);
-                if (!cd_zero_s9) begin
+                if (!(alpha_too_small_s9 || beta_positive_2_s9)) begin
                     current_pixel_next.transmittance = T_test_s9;
                 end
             end
             
             // Stage 10: 更新 RGB, depth, num_of_gaussian
             if (stage_valid_10) begin
-                cd_zero_s10 = (alpha_too_small_1_s10 || beta_positive_3_s10);
-                if (!cd_zero_s10) begin
+                if (!(alpha_too_small_1_s10 || beta_positive_3_s10)) begin
                     current_pixel_next.red   = s10_r;
                     current_pixel_next.green = s10_g;
                     current_pixel_next.blue  = s10_b;

@@ -71,6 +71,7 @@ struct PixelResult {
 template <class V>
 struct RenderResult {
   std::vector<PixelResult<V>> pixels;
+  std::vector<uint64_t> write_cycles;  // WRITE_RESULT strobes, including the terminal strobe.
   uint64_t cycles = 0;          // cycles until Finish (RTL model only)
   uint64_t oob_reads = 0;       // valid stage-1 reads past the SRAM contents
 };
@@ -154,6 +155,7 @@ class RtlRasterizer {
         dout1_oob = a1 >= sram1.size();
         r.dout1 = dout1_oob ? zg : sram1[a1];
         r.dout0 = (r.addr0 < sram0.size()) ? (sram0[r.addr0] & 0x7FF) : 0;
+        if (r.state == WRITE_RESULT) res.write_cycles.push_back(cyc);
         if (r.state == WRITE_RESULT && r.addr2 < static_cast<uint32_t>(tc_.num_pixels())) {
           PixelResult<V>& o = res.pixels[r.addr2];
           o.rgb = (to_u8(r.cur.red, cscale) << 16) | (to_u8(r.cur.green, cscale) << 8) | to_u8(r.cur.blue, cscale);
