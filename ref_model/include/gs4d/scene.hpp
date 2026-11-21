@@ -90,14 +90,17 @@ bool write_golden(const P& p, const std::string& dir, const RenderResult<typenam
   FILE* ft = std::fopen((dir + "/T_img.txt").c_str(), "w");
   FILE* fr = std::fopen((dir + "/rendered_img.txt").c_str(), "w");
   FILE* fd = std::fopen((dir + "/depth_img.txt").c_str(), "w");
-  if (!fn || !ft || !fr || !fd) return false;
+  bool ok = fn && ft && fr && fd;
   for (const auto& px : r.pixels) {
+    if (!ok) break;
     std::fprintf(fn, "%u\n", px.n);
     std::fprintf(ft, "%0*llx\n", hex_digits, static_cast<unsigned long long>(p.to_bits(px.trans)));
     std::fprintf(fr, "%u %u %u\n", (px.rgb >> 16) & 0xFF, (px.rgb >> 8) & 0xFF, px.rgb & 0xFF);
     std::fprintf(fd, "%0*llx\n", hex_digits, static_cast<unsigned long long>(p.to_bits(px.depth)));
   }
-  return std::fclose(fn) == 0 && std::fclose(ft) == 0 && std::fclose(fr) == 0 && std::fclose(fd) == 0;
+  for (FILE* f : {fn, ft, fr, fd})
+    if (f && std::fclose(f) != 0) ok = false;
+  return ok;
 }
 
 }  // namespace gs4d
