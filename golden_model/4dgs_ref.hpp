@@ -178,8 +178,8 @@ class Accelerator {
       st->cache_hits += hit_way >= 0;
       st->cycles += o.cycles;
       st->cycles_noskip += base + 4;
-      // Projection: 4 deform adds + 4 covariance mults; raster: 7 mults + 4 adds/pixel.
-      const uint64_t rm = 7 * kTile, ra = 4 * kTile;
+      // Projection: 4 deform adds + 4 covariance mults; raster: 8 mults + 4 adds/pixel.
+      const uint64_t rm = 8 * kTile, ra = 4 * kTile;
       st->mults += rm + (o.skipped ? 0 : 4);
       st->mults_noskip += rm + 4;
       st->adds += ra + (o.skipped ? 0 : 4);
