@@ -2,6 +2,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <numeric>
 #include <random>
@@ -14,7 +15,7 @@ namespace gs4d {
 
 struct SceneConfig {
   uint32_t seed = 1;
-  int num_gaussians = 600;  // <= sram depth - 1 (last word is a null splat)
+  int num_gaussians = 600;  // 1 .. sram_depth
   int sram_depth = 1089;
 };
 
@@ -41,23 +42,27 @@ inline std::vector<Gaussian4D> make_scene(const SceneConfig& sc, const TileConfi
   return gs;
 }
 
-// Depth-sorted SRAM images for frame t. sram1 gets a trailing null splat
-// (opacity 0) and sram0 is padded with its index, so every word is defined.
+// Depth-sorted SRAM images for frame t. When the scene is smaller than the
+// SRAM, sram1 gets a trailing null splat (opacity 0) and sram0 is padded with
+// its index, so every word is defined. A full scene (gaussians == depth) uses
+// every word, like the original 1089-Gaussian TB.sv pattern.
 template <class P>
 void build_srams(const P& p, const std::vector<Gaussian4D>& gs, double t, int depth,
                  std::vector<Splat<typename P::V>>& sram1, std::vector<uint32_t>& sram0) {
-  if (gs.empty() || static_cast<int>(gs.size()) >= depth)
-    throw std::invalid_argument("build_srams: need 1 <= gaussians < SRAM depth (room for the null splat)");
+  if (gs.empty() || static_cast<int>(gs.size()) > depth)
+    throw std::invalid_argument("build_srams: need 1 <= gaussians <= SRAM depth");
   sram1 = deform_frame(p, gs, t);
   std::vector<uint32_t> order(sram1.size());
   std::iota(order.begin(), order.end(), 0u);
   std::stable_sort(order.begin(), order.end(),
                    [&](uint32_t a, uint32_t b) { return p.lt(sram1[a].depth, sram1[b].depth); });
-  const uint32_t null_idx = static_cast<uint32_t>(sram1.size());
-  sram1.push_back(quantize_splat(p, Splat<double>{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}));
-  while (static_cast<int>(sram1.size()) < depth) sram1.push_back(sram1.back());
   sram0 = order;
-  sram0.resize(depth, null_idx);
+  if (static_cast<int>(sram1.size()) < depth) {
+    const uint32_t null_idx = static_cast<uint32_t>(sram1.size());
+    sram1.push_back(quantize_splat(p, Splat<double>{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}));
+    while (static_cast<int>(sram1.size()) < depth) sram1.push_back(sram1.back());
+    sram0.resize(depth, null_idx);
+  }
 }
 
 // ram_file.txt: one 384-bit hex word per line, field order of Splat.
@@ -81,6 +86,48 @@ inline bool write_gs_value(const std::string& path, const std::vector<uint32_t>&
     std::fputc('\n', f);
   }
   return std::fclose(f) == 0;
+}
+
+// Readers for the RTL memory images ($readmemh / $readmemb formats). Return
+// false on a malformed line or when more than max_words words are present.
+inline bool read_ram_file(const std::string& path, std::vector<Splat<float>>& s, size_t max_words = 1089) {
+  FILE* f = std::fopen(path.c_str(), "r");
+  if (!f) return false;
+  s.clear();
+  bool ok = true;
+  char line[256];
+  while (ok && std::fgets(line, sizeof line, f)) {
+    std::string h;
+    for (const char* c = line; *c; ++c)
+      if (std::isxdigit(static_cast<unsigned char>(*c))) h += *c;
+      else if (*c == '/' ) break;
+    if (h.empty()) continue;
+    if (h.size() != 96 || s.size() >= max_words) { ok = false; break; }
+    float v[12];
+    for (int i = 0; i < 12; ++i) v[i] = bits_to_float(static_cast<uint32_t>(std::stoul(h.substr(8 * i, 8), nullptr, 16)));
+    s.push_back({v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11]});
+  }
+  std::fclose(f);
+  return ok && !s.empty();
+}
+
+inline bool read_gs_value(const std::string& path, std::vector<uint32_t>& idx, size_t max_words = 1089) {
+  FILE* f = std::fopen(path.c_str(), "r");
+  if (!f) return false;
+  idx.clear();
+  bool ok = true;
+  char line[256];
+  while (ok && std::fgets(line, sizeof line, f)) {
+    std::string b;
+    for (const char* c = line; *c; ++c)
+      if (*c == '0' || *c == '1') b += *c;
+      else if (*c == '/') break;
+    if (b.empty()) continue;
+    if (b.size() > 11 || idx.size() >= max_words) { ok = false; break; }
+    idx.push_back(static_cast<uint32_t>(std::stoul(b, nullptr, 2)));
+  }
+  std::fclose(f);
+  return ok && !idx.empty();
 }
 
 // Golden files in the exact formats TB.sv reads.

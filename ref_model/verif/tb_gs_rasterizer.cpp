@@ -3,7 +3,9 @@
 // `gs4d_ref --out DIR` and compares every pixel against DIR/golden_ans,
 // which is produced by the C++ RtlRasterizer<F32Policy> model.
 // Run from inside DIR (the SRAMs $readmem ram_file.txt / gs_value.txt).
+// The RTL outputs are also written to DIR/rtl_out/ in the same formats.
 #include <cstdio>
+#include <sys/stat.h>
 #include <vector>
 
 #include "VGS_RASTERIZER_pipeline.h"
@@ -32,6 +34,7 @@ int main(int argc, char** argv) {
   for (int i = 0; i < 4; ++i) { dut.clk = 1; dut.eval(); dut.clk = 0; dut.eval(); }
   dut.rst_n = 1;
   dut.eval();
+  std::vector<unsigned> on(npix), ot(npix), od(npix), orgb(npix);
   long cycles = 0, mism = 0;
   int idx = 0;
   int mN = 0, mT = 0, mD = 0, mC = 0;
@@ -40,6 +43,7 @@ int main(int argc, char** argv) {
     ++cycles;
     if (dut.en && idx < npix) {
       const unsigned r = (dut.RGB >> 16) & 0xFF, g = (dut.RGB >> 8) & 0xFF, b = dut.RGB & 0xFF;
+      on[idx] = dut.N; ot[idx] = dut.T; od[idx] = dut.D; orgb[idx] = dut.RGB;
       const bool bad_n = dut.N != gn[idx], bad_t = dut.T != gt[idx], bad_d = dut.D != gd[idx];
       const bool bad_c = r != gr[idx] || g != gg[idx] || b != gb[idx];
       mN += bad_n; mT += bad_t; mD += bad_d; mC += bad_c;
@@ -54,6 +58,21 @@ int main(int argc, char** argv) {
     }
     dut.clk = 0; dut.eval();
   }
+  ::mkdir("rtl_out", 0755);
+  FILE* wn = std::fopen("rtl_out/N_img.txt", "w");
+  FILE* wt = std::fopen("rtl_out/T_img.txt", "w");
+  FILE* wr = std::fopen("rtl_out/rendered_img.txt", "w");
+  FILE* wd = std::fopen("rtl_out/depth_img.txt", "w");
+  bool dumped = wn && wt && wr && wd;
+  for (int i = 0; dumped && i < idx; ++i) {
+    std::fprintf(wn, "%u\n", on[i]);
+    std::fprintf(wt, "%08x\n", ot[i]);
+    std::fprintf(wr, "%u %u %u\n", (orgb[i] >> 16) & 0xFF, (orgb[i] >> 8) & 0xFF, orgb[i] & 0xFF);
+    std::fprintf(wd, "%08x\n", od[i]);
+  }
+  for (FILE* f : {wn, wt, wr, wd})
+    if (f && std::fclose(f) != 0) dumped = false;
+  if (!dumped) { std::printf("cannot write rtl_out/*.txt\n"); return 2; }
   std::printf("GS_RASTERIZER_pipeline: %ld cycles, %d pixels written, %ld mismatching pixels (N %d, T %d, D %d, RGB %d)\n",
               cycles, idx, mism, mN, mT, mD, mC);
   return (mism == 0 && idx == npix && dut.Finish) ? 0 : 1;

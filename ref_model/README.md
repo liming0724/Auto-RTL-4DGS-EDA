@@ -41,8 +41,21 @@ accumulation of RGB and interpolated depth, early stop at `T < 1e-4`, `D = depth
 * `stale_trans`: stage 8 reads `T` before stage 9 writes the previous Gaussian's update.
 * `sticky_early`: `early_termination` is never cleared in `INIT_PIXEL`, so after the first
   early-terminated pixel every later pixel ends immediately with `N=0`, `T=1`
-  (2148 of 2550 pixels in scene seed 1). A pixel that walks the whole 1089-entry list reports
-  `N=1090`.
+  (2148 of 2550 pixels in scene seed 1).
+
+Independent of the three switches, a pixel that walks the whole 1089-entry list reports
+`N=1090` (the stage-10 counter increments once more after the `N >= 1089` stop); the
+ideal algorithm reports `N=1089`, as the supplied golden_ans does.
+
+## Golden-answer check
+
+`verif/run_golden.sh [DIR]` renders the scene in `DIR` (default
+`verif/golden/gs_rasterizer`, see its README) with every quirk combination
+`q<dxdy><trans><early>` (q111 = current RTL) and the ideal algorithm, simulates the RTL,
+and prints exact and TB.sv-tolerance mismatch counts per field (N, T, D, RGB) against
+`DIR/golden_ans`, with per-pixel lists in `build/golden/mismatch/*.csv`. Only RTL vs q111 is
+gated; golden mismatches are reported. A scene written by `gs4d_ref --n 1089` works as a
+self-test (its golden_ans is the q111 model).
 
 ## Build and run
 

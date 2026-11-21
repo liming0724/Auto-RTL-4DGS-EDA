@@ -34,6 +34,7 @@ SPEC = os.path.join(ROOT, "verif", "fx_mul_rs_spec.v")
 Z3_TIMEOUT_S = 30
 MAX_RETRIES = 3
 FULL_MUL_CEC_S = 120  # multiplier miters are hard for SAT-based cec
+GOLDEN_NOT_RUN = []
 
 # Operator instances taken from FixedConfig (arith.hpp): (name, WA, FA, WB, FB, WO, FO)
 INSTANCES = [
@@ -112,6 +113,16 @@ def tier1(vectors):
         print("  " + line)
     if rc:
         fail("GS_RASTERIZER_pipeline vs C++ model mismatch", log)
+    # Real golden_ans (verif/golden/gs_rasterizer): mismatches vs golden are
+    # reported per RtlQuirks configuration; only RTL vs model is gated.
+    rc, log = run(["bash", os.path.join(ROOT, "verif", "run_golden.sh")])
+    print("  -- golden_ans comparison")
+    for line in log.strip().splitlines():
+        print("  " + line)
+    if rc == 3:
+        GOLDEN_NOT_RUN.append("golden_ans comparison not run (scene inputs missing)")
+    elif rc:
+        fail("GS_RASTERIZER_pipeline vs C++ model mismatch on the golden_ans scene", log)
 
 
 def yosys_blif(srcs, top, params, out):
@@ -249,7 +260,7 @@ def main():
         tier2()
     if args.upto >= 3:
         tier3()
-    print("FUNNEL PASS")
+    print("FUNNEL PASS" + "".join(" (%s)" % m for m in GOLDEN_NOT_RUN))
 
 
 if __name__ == "__main__":

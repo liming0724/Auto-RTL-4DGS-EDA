@@ -19,7 +19,7 @@ verilator --cc --exe --build -O2 -Wno-fatal -Wno-lint -Wno-style --top-module GS
   || { tail -40 "$B/verilator.log"; exit 1; }
 status=0
 SCENES=("$@")
-[ ${#SCENES[@]} -eq 0 ] && SCENES=("1:600:0.5" "2:300:0.1" "3:1088:0.9")
+[ ${#SCENES[@]} -eq 0 ] && SCENES=("1:600:0.5" "2:300:0.1" "3:1089:0.9")
 for spec in "${SCENES[@]}"; do
   IFS=: read -r seed n t <<< "$spec"
   d="$B/scene_s${seed}_n${n}_t${t}"
