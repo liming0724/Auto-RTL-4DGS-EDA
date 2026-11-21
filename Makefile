@@ -24,7 +24,8 @@ VERILATOR_BUILD := --cc --exe --build -O2
 
 FORMAL_TOOLS = --yosys "$(YOSYS)" --sv2v "$(SV2V)" --abc "$(ABC)"
 
-.PHONY: lint lint_ssim lint_gs sim sim_ssim sim_gs synth_baseline cec_baseline build_eda formal_netlists formal_z3 test_cegar
+.PHONY: lint lint_ssim lint_gs sim sim_ssim sim_gs synth_baseline cec_baseline build_eda formal_netlists formal_z3 test_cegar \
+	sim_4dgs synth_4dgs formal_4dgs dse_4dgs
 lint: lint_ssim lint_gs
 
 lint_ssim:
@@ -69,3 +70,30 @@ formal_z3: formal_netlists
 test_cegar: formal_z3 $(BUILD)/ssim/Vssim_sim_top
 	$(PYTHON) scripts/formal/cegar_to_verilator.py $(FORMAL_TOOLS) --verilator "$(VERILATOR)" \
 		--lint-flags "$(SSIM_LINT)" --golden-bin $(BUILD)/ssim/Vssim_sim_top
+
+# ---------------------------------------------------------------- Phase 3: rtl_4dgs
+G4_BUILD := $(abspath build/4dgs)
+G4_TOOLS = --verilator "$(VERILATOR)" --yosys "$(YOSYS)" --sv2v "$(SV2V)" --abc "$(ABC)"
+DSE_JOBS ?= 4
+
+$(G4_BUILD)/4dgs_ref: golden_model/4dgs_ref.cpp golden_model/4dgs_ref.hpp $(GS_REF)
+	mkdir -p $(@D)
+	$(CXX) -std=c++17 -O2 -Wall -Wextra -Iref_model/include -Igolden_model -o $@ $<
+
+# Tier 1: golden-model self-check, Verilator -Wall lint, >= 20k-cycle bit-true simulation.
+sim_4dgs: $(G4_BUILD)/4dgs_ref
+	$(G4_BUILD)/4dgs_ref --sweep > $(G4_BUILD)/golden_sweep.csv
+	$(G4_BUILD)/4dgs_ref --thresh 16 --trace-dir $(G4_BUILD)
+	$(PYTHON) scripts/dse/gs4d_flow.py sim $(G4_TOOLS)
+
+# Tier 2: Yosys/ABC generic-cell synthesis + ABC CEC of gs4d_accelerator_top.
+synth_4dgs: sim_4dgs
+	$(PYTHON) scripts/dse/gs4d_flow.py synth $(G4_TOOLS)
+
+# Tier 3: Z3 proofs through eda_core (30 s breaker, COI slicing, BMC-20).
+formal_4dgs: synth_4dgs build_eda
+	$(PYTHON) scripts/formal/rtl_to_netlist.py gs4d_skip_unit gs4d_cache gs4d_top --check $(FORMAL_TOOLS)
+	$(PYTHON) scripts/formal/verify_z3_4dgs.py
+
+dse_4dgs: $(G4_BUILD)/4dgs_ref
+	$(PYTHON) scripts/dse/run_dse_sweep.py $(G4_TOOLS) --jobs $(DSE_JOBS)

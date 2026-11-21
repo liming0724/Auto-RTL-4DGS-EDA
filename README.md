@@ -32,6 +32,10 @@ Auto-RTL-4DGS-EDA/
         ├── SRAM_OutputPixel.v    # Output pixel buffer SRAM behavioral model
         ├── SRAM_SortedGaussianBall.v # Sorted Gaussian primitive buffer model
         └── TB.sv                 # SystemVerilog testbench environment
+├── golden_model/                 # Phase 3 bit-true 4DGS spatiotemporal model (4dgs_ref.hpp/.cpp CLI)
+├── rtl_4dgs/                     # Phase 3 4DGS accelerator: temporal skip unit, motion-aware cache,
+│   │                             # NUM_PE raster lanes, gs4d_accelerator_top (+ sim/sim_main_4dgs.cpp)
+└── scripts/dse/                  # Phase 3 per-configuration flow and Pareto DSE sweep
 ```
 
 ---
@@ -75,6 +79,12 @@ make -j2 sim             # or sim_ssim / sim_gs
 make -j2 cec_baseline    # runs simulation, generic synthesis, then ABC CEC
 make formal_z3           # Tier 3: Z3 proofs with 30 s / 3-retry / COI / BMC-20 breakers
 make test_cegar          # injected fault -> Z3 SAT -> cegar_trace.hex -> Verilator FAIL
+
+### Run the Phase 3 4DGS accelerator
+```bash
+make sim_4dgs            # golden model + Verilator -Wall + >= 20k-cycle bit-true simulation
+make formal_4dgs         # Tier 2 Yosys/ABC + CEC, then Tier 3 Z3 proofs (skip / cache / top)
+make dse_4dgs            # 36-point Pareto sweep (DSE_JOBS=4); see docs/DSE_PARETO_4DGS.md
 ```
 
 See [Baseline metrics](docs/BASELINE_METRICS.md) for setup, expected results, and
