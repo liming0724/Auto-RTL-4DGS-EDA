@@ -2,7 +2,6 @@
 #pragma once
 
 #include <algorithm>
-#include <cctype>
 #include <cstdio>
 #include <numeric>
 #include <random>
@@ -88,6 +87,17 @@ inline bool write_gs_value(const std::string& path, const std::vector<uint32_t>&
   return std::fclose(f) == 0;
 }
 
+// One memory word per line: the line minus a trailing // comment and outer
+// whitespace. Anything else left on the line makes the word invalid.
+inline std::string mem_word(const char* line) {
+  std::string w(line);
+  const size_t c = w.find("//");
+  if (c != std::string::npos) w.erase(c);
+  const size_t a = w.find_first_not_of(" \t\r\n");
+  if (a == std::string::npos) return "";
+  return w.substr(a, w.find_last_not_of(" \t\r\n") - a + 1);
+}
+
 // Readers for the RTL memory images ($readmemh / $readmemb formats). Return
 // false on a malformed line or when more than max_words words are present.
 inline bool read_ram_file(const std::string& path, std::vector<Splat<float>>& s, size_t max_words = 1089) {
@@ -97,12 +107,10 @@ inline bool read_ram_file(const std::string& path, std::vector<Splat<float>>& s,
   bool ok = true;
   char line[256];
   while (ok && std::fgets(line, sizeof line, f)) {
-    std::string h;
-    for (const char* c = line; *c; ++c)
-      if (std::isxdigit(static_cast<unsigned char>(*c))) h += *c;
-      else if (*c == '/' ) break;
+    const std::string h = mem_word(line);
     if (h.empty()) continue;
-    if (h.size() != 96 || s.size() >= max_words) { ok = false; break; }
+    if (h.size() != 96 || s.size() >= max_words ||
+        h.find_first_not_of("0123456789abcdefABCDEF") != std::string::npos) { ok = false; break; }
     float v[12];
     for (int i = 0; i < 12; ++i) v[i] = bits_to_float(static_cast<uint32_t>(std::stoul(h.substr(8 * i, 8), nullptr, 16)));
     s.push_back({v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11]});
@@ -118,12 +126,12 @@ inline bool read_gs_value(const std::string& path, std::vector<uint32_t>& idx, s
   bool ok = true;
   char line[256];
   while (ok && std::fgets(line, sizeof line, f)) {
-    std::string b;
-    for (const char* c = line; *c; ++c)
-      if (*c == '0' || *c == '1') b += *c;
-      else if (*c == '/') break;
+    const std::string b = mem_word(line);
     if (b.empty()) continue;
-    if (b.size() > 11 || idx.size() >= max_words) { ok = false; break; }
+    if (b.size() > 11 || idx.size() >= max_words || b.find_first_not_of("01") != std::string::npos) {
+      ok = false;
+      break;
+    }
     idx.push_back(static_cast<uint32_t>(std::stoul(b, nullptr, 2)));
   }
   std::fclose(f);
