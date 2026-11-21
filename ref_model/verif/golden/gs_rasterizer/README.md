@@ -19,5 +19,9 @@ then `py` 0..33 and writes pixel `py*75 + px`; TB.sv compares write address
 plus the ideal algorithm) and the RTL against these files. It needs the scene
 that produced them next to this README: `ram_file.txt` (1089 × 384-bit hex
 splat words, `$readmemh`) and `gs_value.txt` (1089 × 11-bit binary sorted
-indices, `$readmemb`). Until those two files are added the funnel prints the
+indices, `$readmemb`), both supplied by the repo owner from the lab originals
+(CRLF line endings normalized to LF). Without them the funnel prints the
 golden statistics and reports the comparison as not run.
+
+`q000_snrd` (every `RtlQuirks` flag off) is the configuration closest to these
+files; see `ref_model/README.md` for what each flag does.

@@ -9,7 +9,8 @@
 # the golden statistics are printed and the script exits 3.
 #
 # With them it renders the scene with the C++ model for every RtlQuirks
-# combination (q<dxdy><trans><early>, q111 = current RTL) and the ideal
+# combination (q<dxdy><trans><early>, q111 = current RTL), q000 with each
+# golden-behaviour flag off (q000_s/n/r/d, q000_snrd = all off) and the ideal
 # algorithm, simulates the RTL (Verilator + sim-only DW substitutes), and
 # reports per-field mismatch counts of each against golden_ans. Exit status is
 # the bit-true gate: 0 iff the RTL matches the q111 model on every pixel.

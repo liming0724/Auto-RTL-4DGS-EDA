@@ -9,7 +9,11 @@
 //   * stage 8 reads current_pixel.transmittance before stage 9 has written the
 //     previous Gaussian's update (1-cycle read-after-write gap),
 //   * early_termination / T_testx15 are not cleared in INIT_PIXEL and keep
-//     updating during FINALIZE.
+//     updating during FINALIZE,
+//   * PROCESS ends one cycle after the Gaussian that drives T below 1e-4, so
+//     whatever sits in stage 10 then still commits,
+//   * num_of_gaussian steps to 1090 on a full traversal,
+//   * the 9-bit colour is truncated to 8 bits (wraps above 255).
 #pragma once
 
 #include <cstdint>
@@ -29,12 +33,21 @@ struct TileConfig {
   int num_pixels() const { return width * height; }
 };
 
-// Each flag reproduces one observed RTL pipeline behaviour (default: all on,
-// i.e. bit-true to the current RTL). Turning one off models the fix.
+// Each flag reproduces one observed RTL behaviour (default: all on, i.e.
+// bit-true to the current RTL). Turning one off models the fix; the last four
+// off give the behaviour seen in the lab golden_ans (verif/golden/).
 struct RtlQuirks {
   bool stale_dxdy_depth = true;  // stage 3 uses dx_s2/dy_s2 (next Gaussian's) for depth
   bool stale_trans = true;       // stage 8 misses the stage-9 transmittance write-back
   bool sticky_early = true;      // early_termination not cleared in INIT_PIXEL
+  // on: stop on the Gaussian that drives T below 1e-4 (plus the stage-10
+  // entry in flight); off: blend one more alpha >= 1/255 Gaussian, then stop.
+  bool stop_on_crossing = true;
+  bool n_overshoot = true;       // on: N reaches 1090 on a full traversal; off: N <= 1089
+  bool rgb_wrap = true;          // on: 9-bit colour & 0xFF; off: saturate at 255
+  // on: depth accumulates every committed Gaussian; off: depth skips the
+  // Gaussian that drives T below 1e-4 and every one after it.
+  bool depth_stop_tail = true;
 };
 
 // IEEE-754 binary32 bit patterns of the RTL constants.
@@ -85,6 +98,7 @@ class RtlRasterizer {
     const V t_min = p.cst(k::kTMin, Sig::kTrans);
     const V bg_depth = p.cst(k::kBgDepth, Sig::kDepth);
     const V cscale = p.cst(k::kColorScale, Sig::kPixel);
+    const uint32_t max_n = static_cast<uint32_t>(tc_.max_gaussians);
 
     struct Pix { V red, green, blue, depth, trans; uint32_t n; };
     struct Regs {
@@ -104,6 +118,7 @@ class RtlRasterizer {
       V oma9, tacc9, ttest9; bool small9 = false; V di9; bool bp9 = false;
       V ttest10, r10, g10, b10, d10; bool bp10 = false, small10 = false;
       bool early = false; V tx15;
+      bool crossed = false, done = false;  // model-only state for the golden stop rule
       uint32_t dout0 = 0; G dout1;
     };
 
@@ -141,10 +156,7 @@ class RtlRasterizer {
         r.dout0 = (r.addr0 < sram0.size()) ? (sram0[r.addr0] & 0x7FF) : 0;
         if (r.state == WRITE_RESULT && r.addr2 < static_cast<uint32_t>(tc_.num_pixels())) {
           PixelResult<V>& o = res.pixels[r.addr2];
-          const uint32_t ir = p.to_uint(p.mul(r.cur.red, cscale, Sig::kPixel), 9) & 0xFF;
-          const uint32_t ig = p.to_uint(p.mul(r.cur.green, cscale, Sig::kPixel), 9) & 0xFF;
-          const uint32_t ib = p.to_uint(p.mul(r.cur.blue, cscale, Sig::kPixel), 9) & 0xFF;
-          o.rgb = (ir << 16) | (ig << 8) | ib;
+          o.rgb = (to_u8(r.cur.red, cscale) << 16) | (to_u8(r.cur.green, cscale) << 8) | to_u8(r.cur.blue, cscale);
           o.depth = p.add(r.cur.depth, r.tx15, Sig::kDepth);
           o.trans = r.cur.trans;
           o.n = r.cur.n;
@@ -165,7 +177,7 @@ class RtlRasterizer {
         case IDLE: n.state = INIT_PIXEL; break;
         case INIT_PIXEL: n.state = PROCESS; break;
         case PROCESS:
-          n.state = (r.cur.n >= static_cast<uint32_t>(tc_.max_gaussians) || r.early || all_gauss_done) ? FINALIZE : PROCESS;
+          n.state = (r.cur.n >= max_n || (q_.stop_on_crossing ? r.early : r.done) || all_gauss_done) ? FINALIZE : PROCESS;
           break;
         case FINALIZE: n.state = WRITE_RESULT; break;
         case WRITE_RESULT: n.state = all_pixels_done ? COMPLETE : INIT_PIXEL; break;
@@ -182,20 +194,32 @@ class RtlRasterizer {
         else { n.px = 0; if (r.py < static_cast<uint32_t>(tc_.height - 1)) n.py = r.py + 1; }
       }
 
+      // Stage-10 commit gating. With the default quirks every stage-10 entry
+      // commits, as in the RTL.
+      const bool valid10 = !(r.small10 || r.bp10);
+      const bool live10 = r.sv[10] && (q_.n_overshoot || r.cur.n < max_n) && (q_.stop_on_crossing || !r.done);
+      const bool cross10 = live10 && valid10 && p.lt(r.ttest10, t_min);
+      const bool done_now = r.done || (live10 && valid10 && r.crossed);
+      const uint32_t seq9 = r.cur.n + (live10 ? 1 : 0);  // 0-based index of the stage-9 entry
+      const bool live9 = (q_.n_overshoot || seq9 < max_n) && (q_.stop_on_crossing || !done_now);
+
       // current_pixel
       if (r.state == INIT_PIXEL) {
         n.cur = Pix{Z(Sig::kColor), Z(Sig::kColor), Z(Sig::kColor), Z(Sig::kDepth), one_t, 0};
+        n.crossed = n.done = false;
       } else if (r.state == PROCESS) {
-        if (r.sv[9] && !(r.small9 || r.bp9)) n.cur.trans = r.ttest9;
-        if (r.sv[10]) {
-          if (!(r.small10 || r.bp10)) {
+        if (r.sv[9] && !(r.small9 || r.bp9) && live9) n.cur.trans = r.ttest9;
+        if (live10) {
+          if (valid10) {
             n.cur.red = p.add(r.cur.red, r.r10, Sig::kColor);
             n.cur.green = p.add(r.cur.green, r.g10, Sig::kColor);
             n.cur.blue = p.add(r.cur.blue, r.b10, Sig::kColor);
-            n.cur.depth = p.add(r.cur.depth, r.d10, Sig::kDepth);
+            if (q_.depth_stop_tail || !(r.crossed || cross10)) n.cur.depth = p.add(r.cur.depth, r.d10, Sig::kDepth);
           }
           n.cur.n = (r.cur.n + 1) & 0x7FF;
         }
+        n.crossed = r.crossed || cross10;
+        n.done = done_now;
       }
 
       // valid pipeline
@@ -276,16 +300,19 @@ class RtlRasterizer {
         n.small10 = r.small9;
       }
       if (r.state == INIT_PIXEL && !q_.sticky_early) n.early = false;
-      if (r.sv[10]) {
-        n.early = (r.small10 || r.bp10) ? false : p.lt(r.ttest10, t_min);
-        n.tx15 = p.mul(r.ttest10, bg_depth, Sig::kDepth);
-      }
+      if (r.sv[10]) n.early = (r.small10 || r.bp10) ? false : p.lt(r.ttest10, t_min);
+      if (live10) n.tx15 = p.mul(r.ttest10, bg_depth, Sig::kDepth);
       r = n;
     }
     return res;
   }
 
  private:
+  uint32_t to_u8(const V& c, const V& cscale) const {
+    const uint32_t u = p_.to_uint(p_.mul(c, cscale, Sig::kPixel), 9);
+    return q_.rgb_wrap ? (u & 0xFF) : (u > 255 ? 255 : u);
+  }
+
   P p_;
   TileConfig tc_;
   RtlQuirks q_;

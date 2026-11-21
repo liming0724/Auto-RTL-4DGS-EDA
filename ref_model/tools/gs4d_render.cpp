@@ -6,7 +6,10 @@
 // formats for every RtlQuirks combination and for the hazard-free sequential
 // algorithm:
 //   q<D><T><E>  RtlRasterizer with stale_dxdy_depth=D, stale_trans=T,
-//               sticky_early=E (q111 = bit-true to the current RTL)
+//               sticky_early=E, other flags on (q111 = bit-true to the current RTL)
+//   q000_<f>    q000 with one more flag off: s stop_on_crossing, n n_overshoot,
+//               r rgb_wrap, d depth_stop_tail
+//   q000_snrd   every RtlQuirks flag off (the golden_ans behaviour)
 //   ideal       render_ideal (no pipeline hazards)
 #include <cstring>
 #include <sys/stat.h>
@@ -40,7 +43,7 @@ int main(int argc, char** argv) {
     const std::string d = out + "/" + tag;
     ::mkdir(d.c_str(), 0755);
     if (!write_golden(pf, d, r, 8)) { std::fprintf(stderr, "write failed: %s\n", d.c_str()); return false; }
-    std::printf("%-6s cycles %llu  oob reads %llu\n", tag.c_str(), (unsigned long long)r.cycles,
+    std::printf("%-9s cycles %llu  oob reads %llu\n", tag.c_str(), (unsigned long long)r.cycles,
                 (unsigned long long)r.oob_reads);
     return true;
   };
@@ -49,6 +52,15 @@ int main(int argc, char** argv) {
     char tag[8];
     std::snprintf(tag, sizeof tag, "q%d%d%d", q.stale_dxdy_depth, q.stale_trans, q.sticky_early);
     if (!emit(tag, RtlRasterizer<F32Policy>(pf, tc, q).run(s1, s0))) return 1;
+  }
+  for (const char* f : {"s", "n", "r", "d", "snrd"}) {
+    RtlQuirks q{false, false, false};
+    const std::string fs(f);
+    q.stop_on_crossing = fs.find('s') == std::string::npos;
+    q.n_overshoot = fs.find('n') == std::string::npos;
+    q.rgb_wrap = fs.find('r') == std::string::npos;
+    q.depth_stop_tail = fs.find('d') == std::string::npos;
+    if (!emit("q000_" + fs, RtlRasterizer<F32Policy>(pf, tc, q).run(s1, s0))) return 1;
   }
   return emit("ideal", render_ideal(pf, s1, s0, tc)) ? 0 : 1;
 }
