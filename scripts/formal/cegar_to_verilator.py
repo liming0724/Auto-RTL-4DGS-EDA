@@ -96,10 +96,11 @@ def first_mismatch(golden_sim, faulty_sim, golden, faulty):
     return None, None
 
 
-def verilate(mdir, shift_rtl, args):
+def verilate(mdir, shift_rtl, args, trace=False):
     sources = [str(ROOT / s) for s in SSIM_RTL]
     sources[2] = str(shift_rtl)
-    cmd = [args.verilator, "--cc", "--exe", "--build", "-O2", *shlex.split(args.lint_flags),
+    cmd = [args.verilator, "--cc", "--exe", "--build", "-O2", *(["--trace"] if trace else []),
+           *shlex.split(args.lint_flags),
            "--top-module", "ssim_sim_top", "--Mdir", str(mdir), *sources,
            str(ROOT / "rtl_baseline/sim/sim_main_ssim.cpp")]
     with open(mdir.parent / f"{mdir.name}.verilator.log", "w", encoding="utf-8") as log:
@@ -108,8 +109,9 @@ def verilate(mdir, shift_rtl, args):
     return mdir / "Vssim_sim_top"
 
 
-def replay(binary, trace, breaker, label):
-    result = subprocess.run([str(binary), "--cegar", str(trace)], capture_output=True, text=True, timeout=120)
+def replay(binary, trace, breaker, label, wave=None):
+    cmd = [str(binary), "--cegar", str(trace), *([str(wave)] if wave else [])]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     breaker.say(f"  {label}: exit {result.returncode}: {(result.stdout + result.stderr).strip()}")
     return result.returncode, result.stdout
 
@@ -146,11 +148,14 @@ def run_fault(fault, args, breaker):
     breaker.say(f"  trace {trace.relative_to(ROOT)}: {len(frames)} cycles, predicted FAIL at cycle {cycle} ({signal})")
 
     golden_bin = args.golden_bin or verilate(out / "obj_golden", ROOT / SHIFT_RTL, args)
-    faulty_bin = verilate(out / "obj_faulty", faulty_rtl, args)
+    faulty_bin = verilate(out / "obj_faulty", faulty_rtl, args, trace=True)
     rc_golden, _ = replay(golden_bin, trace, breaker, "golden RTL replay")
-    rc_faulty, log = replay(faulty_bin, trace, breaker, "faulty RTL replay")
+    wave = out / "cegar_faulty.vcd"
+    rc_faulty, log = replay(faulty_bin, trace, breaker, "faulty RTL replay", wave)
+    breaker.say(f"  waveform {wave.relative_to(ROOT) if wave.is_relative_to(ROOT) else wave}"
+                f" ({wave.stat().st_size if wave.exists() else 0} bytes)")
     reproduced = re.search(r"CEGAR FAIL: cycle (\d+)", log)
-    ok = rc_golden == 0 and rc_faulty == 1 and reproduced and int(reproduced.group(1)) == cycle
+    ok = rc_golden == 0 and rc_faulty == 1 and wave.exists() and reproduced and int(reproduced.group(1)) == cycle
     breaker.say(f"  {'PASS' if ok else 'FAIL'}: fault {fault} "
                 f"{'reproduced as Verilator FAIL at cycle %d' % cycle if ok else 'not reproduced as predicted'}")
     return ok
