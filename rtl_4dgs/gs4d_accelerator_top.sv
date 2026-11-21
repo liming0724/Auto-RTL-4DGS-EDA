@@ -60,6 +60,7 @@ module gs4d_accelerator_top #(
     localparam int SET_W = $clog2(CACHE_SETS);
     localparam int TAG_W = ID_W - SET_W;
     localparam int DW    = 6 * W;
+    localparam int CNT_W = R > 4 ? $clog2(R) : 2;
 
     `include "gs4d_fx.svh"
 
@@ -70,7 +71,7 @@ module gs4d_accelerator_top #(
     localparam logic [2:0] S_OUT    = 3'd4;
 
     logic [2:0] state;
-    logic [1:0] cnt;
+    logic [CNT_W-1:0] cnt;
 
     // Captured transaction.
     logic [W-1:0] mu0x_q, mu0y_q, dmux_q, dmuy_q, s0x_q, s0y_q, dsx_q, dsy_q;
@@ -102,7 +103,7 @@ module gs4d_accelerator_top #(
     );
 
     assign proj_p   = fxmul(proj_a, proj_b);
-    assign cache_wr = state == S_PROJ && cnt == 2'd3;
+    assign cache_wr = state == S_PROJ && cnt == CNT_W'(3);
     assign wr_data  = {out_mean_x, out_mean_y, out_cov_a, proj_p, out_cov_c, out_opacity};
 
     motion_aware_cache #(
@@ -189,11 +190,11 @@ module gs4d_accelerator_top #(
                     end
                 end
                 S_PROJ: begin
-                    cnt <= cnt + 2'd1;
+                    cnt <= cnt + 1'b1;
                     case (cnt)
-                        2'd0: begin out_cov_a <= proj_p; proj_a <= sy_q;  proj_b <= sy_q;   end
-                        2'd1: begin out_cov_c <= proj_p; proj_a <= sx_q;  proj_b <= sy_q;   end
-                        2'd2: begin                      proj_a <= rho_q; proj_b <= proj_p; end
+                        CNT_W'(0): begin out_cov_a <= proj_p; proj_a <= sy_q;  proj_b <= sy_q;   end
+                        CNT_W'(1): begin out_cov_c <= proj_p; proj_a <= sx_q;  proj_b <= sy_q;   end
+                        CNT_W'(2): begin                      proj_a <= rho_q; proj_b <= proj_p; end
                         default: begin
                             out_cov_b <= proj_p;
                             cnt   <= '0;
@@ -208,7 +209,7 @@ module gs4d_accelerator_top #(
                         cnt   <= '0;
                         state <= S_OUT;
                     end else begin
-                        cnt <= cnt + 2'd1;
+                        cnt <= cnt + 1'b1;
                     end
                 end
                 S_OUT: if (out_ready) state <= S_ACCEPT;
