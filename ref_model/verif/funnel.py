@@ -164,7 +164,9 @@ def tier2():
         marea = yosys_blif(RTL, "fx_mul_rs", mp, mimpl)
         yosys_blif([SPEC], "fx_mul_rs_spec", mp, mspec)
         mok, mlog = abc_cec(mimpl, mspec, FULL_MUL_CEC_S)
-        if mok is False:
+        if mok is None:
+            fail("cec fx_mul_rs %s: timeout after %d s, equivalence not proven" % (tag, FULL_MUL_CEC_S), mlog)
+        if not mok:
             fail("cec fx_mul_rs " + tag, mlog)
         print("  %-24s ROUND=%d SAT=%d  round_sat: equivalent, %4d AND, depth %2d | full mul: %s, %5d AND, depth %3d"
               % (name, rnd, sat, area, abc_depth(impl), "equivalent" if mok else "cec timeout (%d s)" % FULL_MUL_CEC_S,
