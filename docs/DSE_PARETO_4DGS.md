@@ -16,7 +16,7 @@
 | Bit-true golden model | `golden_model/4dgs_ref.hpp`, `golden_model/4dgs_ref.cpp` | Q(7,`Q_FRAC`) signed fixed point (half-up rounding, saturation, same API as `ref_model/include/gs4d/fixed_point.hpp`); deformation `mu(t)=mu0+dmu(t)`, `s(t)=s0+ds(t)`; 2D covariance projection; L1 skip test; set-associative cache; CLI stimulus/trace generator (`--trace-dir`, `--sweep`) |
 | Temporal skip unit | `rtl_4dgs/temporal_skip_unit.sv` | `delta = |dmu_x|+|dmu_y|+|ds_x|+|ds_y|`, `skip_deform = delta < motion_thresh` (strict, so `motion_thresh = 0` never skips) |
 | Motion-aware cache | `rtl_4dgs/motion_aware_cache.sv`, `rtl_4dgs/SRAM_gs4d_cache.sv` | `CACHE_SETS` × `CACHE_WAYS`, one 1R1W SRAM per way storing `{tag, mean_x, mean_y, cov_a, cov_b, cov_c, opacity}`; valid bits + round-robin victim; synchronous lookup, non-blocking write-back to the way selected at lookup, write→read forwarding |
-| Accelerator top | `rtl_4dgs/gs4d_accelerator_top.sv`, `rtl_4dgs/gs4d_raster_lane.sv`, `rtl_4dgs/gs4d_fx.svh` | FSM `ACCEPT → LOOKUP → (PROJ ×4) → RASTER ×(16/NUM_PE) → OUT`; skip **and** cache hit bypasses PROJ (projection operand registers are not loaded, so the covariance multipliers see no new operands); `NUM_PE` parallel lanes extend the baseline rasterizer's per-pixel alpha stage over a 16-pixel span |
+| Accelerator top | `rtl_4dgs/gs4d_accelerator_top.sv`, `rtl_4dgs/gs4d_raster_lane.sv`, `rtl_4dgs/gs4d_fx.svh` | FSM `ACCEPT → LOOKUP → (PROJ ×4) → RASTER ×(TILE/NUM_PE) → OUT`; skip **and** cache hit bypasses PROJ (projection operand registers are not loaded, so the covariance multipliers see no new operands); `NUM_PE` parallel lanes extend the baseline rasterizer's per-pixel alpha stage over a `TILE`-pixel span (default 4) |
 | Testbench | `rtl_4dgs/sim/sim_main_4dgs.cpp` | Drives the 4-frame scene with input bubbles and random `out_ready` back-pressure, checks every transaction bit-for-bit against the golden model, output stability under back-pressure, and projection operand isolation on skipped transactions |
 | Flow / DSE | `scripts/dse/gs4d_flow.py`, `scripts/dse/run_dse_sweep.py` | per-configuration lint → sim → synth → CEC; 36-point sweep + Pareto extraction |
 | Formal | `scripts/formal/rtl_to_netlist.py` (targets `gs4d_skip_unit`, `gs4d_cache`, `gs4d_top`), `scripts/formal/verify_z3_4dgs.py` | eda_core netlists, 30 s / 3-retry breaker, COI slicing, BMC-20 |
@@ -65,10 +65,10 @@ Default configuration (`NUM_PE=1, Q_FRAC=8, CACHE_WAYS=2, CACHE_SETS=512`), **ge
 
 | Metric | Value |
 |---|---|
-| Generic gates after `abc -g AND,OR,XOR,MUX` | 27,467 |
+| Generic gates after `abc -g AND,OR,XOR,MUX` | 27,571 |
 | Flip-flops | 2,118 |
-| Optimized AIG AND nodes | 32,304 |
-| AIG logic levels (critical-path depth) | 334 |
+| Optimized AIG AND nodes | 32,540 |
+| AIG logic levels (critical-path depth) | 339 |
 | Opaque SRAM ways / bits | 2 / 101,376 |
 | ABC CEC (pre-map vs mapped, mapped vs optimized) | PASS |
 
@@ -155,56 +155,55 @@ SRAM excluded and given separately as `sram_bits`); `adp = area × levels`;
 
 | num_pe | cache_ways | q_frac | motion_thresh | sim_cycles | mismatches | skip_rate | speedup | throughput | lossy_alpha_px | max_alpha_err_lsb | gates | ffs | aig_and | levels | sram_bits | area | adp | eff_thr | pareto2 | pareto3 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | 1 | 8 | 0 | 46689 | 0 | 0.0 | 1.0 | 0.3636 | 0 | 0 | 22075 | 1606 | 26157 | 340 | 50688 | 35793 | 12169620 | 1.0695 |  |  |
-| 1 | 1 | 8 | 16 | 45393 | 0 | 0.0898 | 1.0338 | 0.3759 | 54 | 6 | 22075 | 1606 | 26157 | 340 | 50688 | 35793 | 12169620 | 1.1056 | **yes** | **yes** |
-| 1 | 1 | 12 | 0 | 46689 | 0 | 0.0 | 1.0 | 0.3636 | 0 | 0 | 31525 | 1738 | 37329 | 416 | 62976 | 47757 | 19866912 | 0.8741 |  |  |
-| 1 | 1 | 12 | 16 | 45437 | 0 | 0.082 | 1.0307 | 0.3748 | 0 | 0 | 31525 | 1738 | 37329 | 416 | 62976 | 47757 | 19866912 | 0.901 |  |  |
-| 1 | 2 | 8 | 0 | 46689 | 0 | 0.0 | 1.0 | 0.3636 | 0 | 0 | 27467 | 2118 | 32304 | 334 | 101376 | 45012 | 15034008 | 1.0887 |  |  |
-| 1 | 2 | 8 | 16 | 42698 | 0 | 0.2578 | 1.1034 | 0.4013 | 187 | 6 | 27467 | 2118 | 32304 | 334 | 101376 | 45012 | 15034008 | 1.2014 | **yes** | **yes** |
-| 1 | 2 | 12 | 0 | 46689 | 0 | 0.0 | 1.0 | 0.3636 | 0 | 0 | 37170 | 2250 | 43866 | 420 | 125952 | 57366 | 24093720 | 0.8658 |  |  |
-| 1 | 2 | 12 | 16 | 43062 | 0 | 0.2314 | 1.0919 | 0.3971 | 0 | 0 | 37170 | 2250 | 43866 | 420 | 125952 | 57366 | 24093720 | 0.9454 |  |  |
-| 1 | 4 | 8 | 0 | 46689 | 0 | 0.0 | 1.0 | 0.3636 | 0 | 0 | 38022 | 3656 | 44823 | 342 | 202752 | 66759 | 22831578 | 1.0633 |  |  |
-| 1 | 4 | 8 | 16 | 38032 | 0 | 0.5574 | 1.2542 | 0.4561 | 451 | 7 | 38022 | 3656 | 44823 | 342 | 202752 | 66759 | 22831578 | 1.3335 |  | **yes** |
-| 1 | 4 | 12 | 0 | 46689 | 0 | 0.0 | 1.0 | 0.3636 | 0 | 0 | 47261 | 3788 | 56332 | 424 | 251904 | 79060 | 33521440 | 0.8576 |  |  |
-| 1 | 4 | 12 | 16 | 38864 | 0 | 0.4929 | 1.2184 | 0.443 | 0 | 0 | 47261 | 3788 | 56332 | 424 | 251904 | 79060 | 33521440 | 1.0449 |  |  |
-| 2 | 1 | 8 | 0 | 38817 | 0 | 0.0 | 1.0 | 0.4444 | 0 | 0 | 31877 | 1606 | 37652 | 340 | 50688 | 47288 | 16077920 | 1.3072 |  |  |
-| 2 | 1 | 8 | 16 | 37499 | 0 | 0.0898 | 1.0416 | 0.4629 | 54 | 6 | 31877 | 1606 | 37652 | 340 | 50688 | 47288 | 16077920 | 1.3616 | **yes** | **yes** |
-| 2 | 1 | 12 | 0 | 38817 | 0 | 0.0 | 1.0 | 0.4444 | 0 | 0 | 46766 | 1738 | 54860 | 421 | 62976 | 65288 | 27486248 | 1.0557 |  |  |
-| 2 | 1 | 12 | 16 | 37607 | 0 | 0.082 | 1.0378 | 0.4613 | 0 | 0 | 46766 | 1738 | 54860 | 421 | 62976 | 65288 | 27486248 | 1.0956 |  |  |
-| 2 | 2 | 8 | 0 | 38817 | 0 | 0.0 | 1.0 | 0.4444 | 0 | 0 | 37588 | 2118 | 43482 | 339 | 101376 | 56190 | 19048410 | 1.311 |  |  |
-| 2 | 2 | 8 | 16 | 35003 | 0 | 0.2578 | 1.1294 | 0.502 | 187 | 6 | 37588 | 2118 | 43482 | 339 | 101376 | 56190 | 19048410 | 1.4807 | **yes** | **yes** |
-| 2 | 2 | 12 | 0 | 38817 | 0 | 0.0 | 1.0 | 0.4444 | 0 | 0 | 51960 | 2250 | 61467 | 425 | 125952 | 74967 | 31860975 | 1.0458 |  |  |
-| 2 | 2 | 12 | 16 | 35420 | 0 | 0.2314 | 1.1147 | 0.4954 | 0 | 0 | 51960 | 2250 | 61467 | 425 | 125952 | 74967 | 31860975 | 1.1657 |  |  |
-| 2 | 4 | 8 | 0 | 38817 | 0 | 0.0 | 1.0 | 0.4444 | 0 | 0 | 47940 | 3656 | 55953 | 342 | 202752 | 77889 | 26638038 | 1.2995 |  |  |
-| 2 | 4 | 8 | 16 | 30543 | 0 | 0.5574 | 1.3293 | 0.5908 | 451 | 7 | 47940 | 3656 | 55953 | 342 | 202752 | 77889 | 26638038 | 1.7275 | **yes** | **yes** |
-| 2 | 4 | 12 | 0 | 38817 | 0 | 0.0 | 1.0 | 0.4444 | 0 | 0 | 63514 | 3788 | 74523 | 426 | 251904 | 97251 | 41428926 | 1.0433 |  |  |
-| 2 | 4 | 12 | 16 | 31430 | 0 | 0.4929 | 1.2805 | 0.5691 | 0 | 0 | 63514 | 3788 | 74523 | 426 | 251904 | 97251 | 41428926 | 1.336 |  |  |
-| 4 | 1 | 8 | 0 | 34863 | 0 | 0.0 | 1.0 | 0.5 | 0 | 0 | 51268 | 1606 | 58834 | 335 | 50688 | 68470 | 22937450 | 1.4925 |  |  |
-| 4 | 1 | 8 | 16 | 33480 | 0 | 0.0898 | 1.047 | 0.5235 | 54 | 6 | 51268 | 1606 | 58834 | 335 | 50688 | 68470 | 22937450 | 1.5627 | **yes** | **yes** |
-| 4 | 1 | 12 | 0 | 34863 | 0 | 0.0 | 1.0 | 0.5 | 0 | 0 | 76886 | 1738 | 89836 | 413 | 62976 | 100264 | 41409032 | 1.2107 |  |  |
-| 4 | 1 | 12 | 16 | 33759 | 0 | 0.082 | 1.0428 | 0.5214 | 0 | 0 | 76886 | 1738 | 89836 | 413 | 62976 | 100264 | 41409032 | 1.2624 |  |  |
-| 4 | 2 | 8 | 0 | 34863 | 0 | 0.0 | 1.0 | 0.5 | 0 | 0 | 56576 | 2118 | 65169 | 335 | 101376 | 77877 | 26088795 | 1.4925 |  |  |
-| 4 | 2 | 8 | 16 | 31129 | 0 | 0.2578 | 1.148 | 0.574 | 187 | 6 | 56576 | 2118 | 65169 | 335 | 101376 | 77877 | 26088795 | 1.7134 | **yes** | **yes** |
-| 4 | 2 | 12 | 0 | 34863 | 0 | 0.0 | 1.0 | 0.5 | 0 | 0 | 83296 | 2250 | 96317 | 411 | 125952 | 109817 | 45134787 | 1.2165 |  |  |
-| 4 | 2 | 12 | 16 | 31613 | 0 | 0.2314 | 1.1309 | 0.5654 | 0 | 0 | 83296 | 2250 | 96317 | 411 | 125952 | 109817 | 45134787 | 1.3757 |  |  |
-| 4 | 4 | 8 | 0 | 34863 | 0 | 0.0 | 1.0 | 0.5 | 0 | 0 | 67056 | 3656 | 77440 | 336 | 202752 | 99376 | 33390336 | 1.4881 |  |  |
-| 4 | 4 | 8 | 16 | 27126 | 0 | 0.5574 | 1.3864 | 0.6932 | 451 | 7 | 67056 | 3656 | 77440 | 336 | 202752 | 99376 | 33390336 | 2.063 | **yes** | **yes** |
-| 4 | 4 | 12 | 0 | 34863 | 0 | 0.0 | 1.0 | 0.5 | 0 | 0 | 93694 | 3788 | 109954 | 424 | 251904 | 132682 | 56257168 | 1.1792 |  |  |
-| 4 | 4 | 12 | 16 | 27942 | 0 | 0.4929 | 1.3271 | 0.6635 | 0 | 0 | 93694 | 3788 | 109954 | 424 | 251904 | 132682 | 56257168 | 1.5649 |  |  |
+| 1 | 1 | 8 | 0 | 46689 | 0 | 0.0 | 1.0 | 0.3636 | 0 | 0 | 21960 | 1606 | 26211 | 342 | 50688 | 35847 | 12259674 | 1.0633 |  |  |
+| 1 | 1 | 8 | 16 | 45393 | 0 | 0.0898 | 1.0338 | 0.3759 | 54 | 6 | 21960 | 1606 | 26211 | 342 | 50688 | 35847 | 12259674 | 1.0992 | **yes** | **yes** |
+| 1 | 1 | 12 | 0 | 46689 | 0 | 0.0 | 1.0 | 0.3636 | 0 | 0 | 31439 | 1738 | 37455 | 419 | 62976 | 47883 | 20062977 | 0.8679 |  |  |
+| 1 | 1 | 12 | 16 | 45437 | 0 | 0.082 | 1.0307 | 0.3748 | 0 | 0 | 31439 | 1738 | 37455 | 419 | 62976 | 47883 | 20062977 | 0.8946 |  |  |
+| 1 | 2 | 8 | 0 | 46689 | 0 | 0.0 | 1.0 | 0.3636 | 0 | 0 | 27571 | 2118 | 32540 | 339 | 101376 | 45248 | 15339072 | 1.0727 |  |  |
+| 1 | 2 | 8 | 16 | 42698 | 0 | 0.2578 | 1.1034 | 0.4013 | 187 | 6 | 27571 | 2118 | 32540 | 339 | 101376 | 45248 | 15339072 | 1.1836 | **yes** | **yes** |
+| 1 | 2 | 12 | 0 | 46689 | 0 | 0.0 | 1.0 | 0.3636 | 0 | 0 | 36801 | 2250 | 43477 | 413 | 125952 | 56977 | 23531501 | 0.8805 |  |  |
+| 1 | 2 | 12 | 16 | 43062 | 0 | 0.2314 | 1.0919 | 0.3971 | 0 | 0 | 36801 | 2250 | 43477 | 413 | 125952 | 56977 | 23531501 | 0.9614 |  |  |
+| 1 | 4 | 8 | 0 | 46689 | 0 | 0.0 | 1.0 | 0.3636 | 0 | 0 | 37938 | 3656 | 44817 | 337 | 202752 | 66753 | 22495761 | 1.079 |  |  |
+| 1 | 4 | 8 | 16 | 38032 | 0 | 0.5574 | 1.2542 | 0.4561 | 451 | 7 | 37938 | 3656 | 44817 | 337 | 202752 | 66753 | 22495761 | 1.3533 |  | **yes** |
+| 1 | 4 | 12 | 0 | 46689 | 0 | 0.0 | 1.0 | 0.3636 | 0 | 0 | 47470 | 3788 | 56162 | 413 | 251904 | 78890 | 32581570 | 0.8805 |  |  |
+| 1 | 4 | 12 | 16 | 38864 | 0 | 0.4929 | 1.2184 | 0.443 | 0 | 0 | 47470 | 3788 | 56162 | 413 | 251904 | 78890 | 32581570 | 1.0728 |  |  |
+| 2 | 1 | 8 | 0 | 38817 | 0 | 0.0 | 1.0 | 0.4444 | 0 | 0 | 32266 | 1606 | 37293 | 335 | 50688 | 46929 | 15721215 | 1.3267 |  |  |
+| 2 | 1 | 8 | 16 | 37499 | 0 | 0.0898 | 1.0416 | 0.4629 | 54 | 6 | 32266 | 1606 | 37293 | 335 | 50688 | 46929 | 15721215 | 1.3819 | **yes** | **yes** |
+| 2 | 1 | 12 | 0 | 38817 | 0 | 0.0 | 1.0 | 0.4444 | 0 | 0 | 46531 | 1738 | 55161 | 415 | 62976 | 65589 | 27219435 | 1.0709 |  |  |
+| 2 | 1 | 12 | 16 | 37607 | 0 | 0.082 | 1.0378 | 0.4613 | 0 | 0 | 46531 | 1738 | 55161 | 415 | 62976 | 65589 | 27219435 | 1.1115 |  |  |
+| 2 | 2 | 8 | 0 | 38817 | 0 | 0.0 | 1.0 | 0.4444 | 0 | 0 | 37644 | 2118 | 43538 | 338 | 101376 | 56246 | 19011148 | 1.3149 |  |  |
+| 2 | 2 | 8 | 16 | 35003 | 0 | 0.2578 | 1.1294 | 0.502 | 187 | 6 | 37644 | 2118 | 43538 | 338 | 101376 | 56246 | 19011148 | 1.4851 | **yes** | **yes** |
+| 2 | 2 | 12 | 0 | 38817 | 0 | 0.0 | 1.0 | 0.4444 | 0 | 0 | 51866 | 2250 | 61639 | 422 | 125952 | 75139 | 31708658 | 1.0532 |  |  |
+| 2 | 2 | 12 | 16 | 35420 | 0 | 0.2314 | 1.1147 | 0.4954 | 0 | 0 | 51866 | 2250 | 61639 | 422 | 125952 | 75139 | 31708658 | 1.1739 |  |  |
+| 2 | 4 | 8 | 0 | 38817 | 0 | 0.0 | 1.0 | 0.4444 | 0 | 0 | 47828 | 3656 | 55992 | 336 | 202752 | 77928 | 26183808 | 1.3228 |  |  |
+| 2 | 4 | 8 | 16 | 30543 | 0 | 0.5574 | 1.3293 | 0.5908 | 451 | 7 | 47828 | 3656 | 55992 | 336 | 202752 | 77928 | 26183808 | 1.7583 | **yes** | **yes** |
+| 2 | 4 | 12 | 0 | 38817 | 0 | 0.0 | 1.0 | 0.4444 | 0 | 0 | 63259 | 3788 | 74216 | 419 | 251904 | 96944 | 40619536 | 1.0607 |  |  |
+| 2 | 4 | 12 | 16 | 31430 | 0 | 0.4929 | 1.2805 | 0.5691 | 0 | 0 | 63259 | 3788 | 74216 | 419 | 251904 | 96944 | 40619536 | 1.3583 |  |  |
+| 4 | 1 | 8 | 0 | 34863 | 0 | 0.0 | 1.0 | 0.5 | 0 | 0 | 51345 | 1606 | 58792 | 337 | 50688 | 68428 | 23060236 | 1.4837 |  |  |
+| 4 | 1 | 8 | 16 | 33480 | 0 | 0.0898 | 1.047 | 0.5235 | 54 | 6 | 51345 | 1606 | 58792 | 337 | 50688 | 68428 | 23060236 | 1.5535 | **yes** | **yes** |
+| 4 | 1 | 12 | 0 | 34863 | 0 | 0.0 | 1.0 | 0.5 | 0 | 0 | 77419 | 1738 | 89668 | 415 | 62976 | 100096 | 41539840 | 1.2048 |  |  |
+| 4 | 1 | 12 | 16 | 33759 | 0 | 0.082 | 1.0428 | 0.5214 | 0 | 0 | 77419 | 1738 | 89668 | 415 | 62976 | 100096 | 41539840 | 1.2563 |  |  |
+| 4 | 2 | 8 | 0 | 34863 | 0 | 0.0 | 1.0 | 0.5 | 0 | 0 | 56535 | 2118 | 65057 | 337 | 101376 | 77765 | 26206805 | 1.4837 |  |  |
+| 4 | 2 | 8 | 16 | 31129 | 0 | 0.2578 | 1.148 | 0.574 | 187 | 6 | 56535 | 2118 | 65057 | 337 | 101376 | 77765 | 26206805 | 1.7032 |  |  |
+| 4 | 2 | 12 | 0 | 34863 | 0 | 0.0 | 1.0 | 0.5 | 0 | 0 | 83172 | 2250 | 95902 | 416 | 125952 | 109402 | 45511232 | 1.2019 |  |  |
+| 4 | 2 | 12 | 16 | 31613 | 0 | 0.2314 | 1.1309 | 0.5654 | 0 | 0 | 83172 | 2250 | 95902 | 416 | 125952 | 109402 | 45511232 | 1.3592 |  |  |
+| 4 | 4 | 8 | 0 | 34863 | 0 | 0.0 | 1.0 | 0.5 | 0 | 0 | 66847 | 3656 | 77062 | 338 | 202752 | 98998 | 33461324 | 1.4793 |  |  |
+| 4 | 4 | 8 | 16 | 27126 | 0 | 0.5574 | 1.3864 | 0.6932 | 451 | 7 | 66847 | 3656 | 77062 | 338 | 202752 | 98998 | 33461324 | 2.0508 | **yes** | **yes** |
+| 4 | 4 | 12 | 0 | 34863 | 0 | 0.0 | 1.0 | 0.5 | 0 | 0 | 93728 | 3788 | 108848 | 423 | 251904 | 131576 | 55656648 | 1.182 |  |  |
+| 4 | 4 | 12 | 16 | 27942 | 0 | 0.4929 | 1.3271 | 0.6635 | 0 | 0 | 93728 | 3788 | 108848 | 423 | 251904 | 131576 | 55656648 | 1.5686 |  |  |
 
 ### Pareto-optimal configurations
 
 | Configuration | area (generic-cell) | levels | adp | throughput (px/cycle) | eff_thr | skip_rate | speedup | front |
 |---|---|---|---|---|---|---|---|---|
-| PE=1, WAYS=1, Q=8, T=16 | 35793 | 340 | 12169620 | 0.3759 | 1.1056 | 0.0898 | 1.0338x | 2-obj + 3-obj |
-| PE=1, WAYS=2, Q=8, T=16 | 45012 | 334 | 15034008 | 0.4013 | 1.2014 | 0.2578 | 1.1034x | 2-obj + 3-obj |
-| PE=2, WAYS=1, Q=8, T=16 | 47288 | 340 | 16077920 | 0.4629 | 1.3616 | 0.0898 | 1.0416x | 2-obj + 3-obj |
-| PE=2, WAYS=2, Q=8, T=16 | 56190 | 339 | 19048410 | 0.502 | 1.4807 | 0.2578 | 1.1294x | 2-obj + 3-obj |
-| PE=1, WAYS=4, Q=8, T=16 | 66759 | 342 | 22831578 | 0.4561 | 1.3335 | 0.5574 | 1.2542x | 3-obj |
-| PE=4, WAYS=1, Q=8, T=16 | 68470 | 335 | 22937450 | 0.5235 | 1.5627 | 0.0898 | 1.047x | 2-obj + 3-obj |
-| PE=4, WAYS=2, Q=8, T=16 | 77877 | 335 | 26088795 | 0.574 | 1.7134 | 0.2578 | 1.148x | 2-obj + 3-obj |
-| PE=2, WAYS=4, Q=8, T=16 | 77889 | 342 | 26638038 | 0.5908 | 1.7275 | 0.5574 | 1.3293x | 2-obj + 3-obj |
-| PE=4, WAYS=4, Q=8, T=16 | 99376 | 336 | 33390336 | 0.6932 | 2.063 | 0.5574 | 1.3864x | 2-obj + 3-obj |
+| PE=1, WAYS=1, Q=8, T=16 | 35847 | 342 | 12259674 | 0.3759 | 1.0992 | 0.0898 | 1.0338x | 2-obj + 3-obj |
+| PE=1, WAYS=2, Q=8, T=16 | 45248 | 339 | 15339072 | 0.4013 | 1.1836 | 0.2578 | 1.1034x | 2-obj + 3-obj |
+| PE=2, WAYS=1, Q=8, T=16 | 46929 | 335 | 15721215 | 0.4629 | 1.3819 | 0.0898 | 1.0416x | 2-obj + 3-obj |
+| PE=2, WAYS=2, Q=8, T=16 | 56246 | 338 | 19011148 | 0.502 | 1.4851 | 0.2578 | 1.1294x | 2-obj + 3-obj |
+| PE=1, WAYS=4, Q=8, T=16 | 66753 | 337 | 22495761 | 0.4561 | 1.3533 | 0.5574 | 1.2542x | 3-obj |
+| PE=4, WAYS=1, Q=8, T=16 | 68428 | 337 | 23060236 | 0.5235 | 1.5535 | 0.0898 | 1.047x | 2-obj + 3-obj |
+| PE=2, WAYS=4, Q=8, T=16 | 77928 | 336 | 26183808 | 0.5908 | 1.7583 | 0.5574 | 1.3293x | 2-obj + 3-obj |
+| PE=4, WAYS=4, Q=8, T=16 | 98998 | 338 | 33461324 | 0.6932 | 2.0508 | 0.5574 | 1.3864x | 2-obj + 3-obj |
 
 ### Skip-rate / speedup analysis (MOTION_THRESH = 16 vs 0, same hardware)
 
@@ -240,12 +239,12 @@ SRAM excluded and given separately as `sram_bits`); `adp = area × levels`;
   55.7% (Q_FRAC=8) and 8.2% / 23.1% / 49.3% (Q_FRAC=12) for 1 / 2 / 4 ways. Skips remove the
   4-cycle projection, so the cycle reduction grows with `NUM_PE`, where projection is a larger share
   of each transaction (4-way, Q_FRAC=8: 1.254× → 1.329× → 1.386× for `NUM_PE` 1 → 2 → 4).
-* **Pareto front.** All 9 non-dominated points use `Q_FRAC = 8, MOTION_THRESH = 16`: the skip path
-  adds throughput on the same hardware, and Q_FRAC=12 costs 18-34% more generic-cell area and
-  76-88 more AIG levels (≈ 335 → ≈ 420). The minimum-ADP point is `NUM_PE=1, CACHE_WAYS=1`; the
-  highest effective throughput is `NUM_PE=4, CACHE_WAYS=4` (2.06 px per 1000 level-delays, 2.7× ADP).
-  `NUM_PE=2, CACHE_WAYS=4` reaches 84% of that throughput at 80% of its ADP.
-* **Quality.** Q_FRAC=8 skipping changes ≤ 451 of 65,536 shaded alpha values by ≤ 7 LSB in this
+* **Pareto front.** All 8 non-dominated points use `Q_FRAC = 8, MOTION_THRESH = 16`: the skip path
+  adds throughput on the same hardware, and Q_FRAC=12 costs 18-46% more generic-cell area and
+  74-85 more AIG levels (335-342 → 413-423). The minimum-ADP point is `NUM_PE=1, CACHE_WAYS=1`; the
+  highest effective throughput is `NUM_PE=4, CACHE_WAYS=4` (2.05 px per 1000 level-delays, 2.7× ADP).
+  `NUM_PE=2, CACHE_WAYS=4` reaches 86% of that throughput at 78% of its ADP.
+* **Quality.** Q_FRAC=8 skipping changes ≤ 451 of 16,384 shaded alpha values by ≤ 7 LSB in this
   scene. `Q_FRAC=12, MOTION_THRESH=16` skips 8-49% with **0 alpha error**; for a lossless-quality
   budget, `NUM_PE=4, CACHE_WAYS=4, Q_FRAC=12` gives 1.327× (not on the generic-cell ADP front).
 * **What the metrics leave out.** SRAM area (`sram_bits`, 50,688-251,904 bits) is outside the
@@ -255,12 +254,12 @@ SRAM excluded and given separately as `sram_bits`); `adp = area × levels`;
 ### Bottlenecks and fallbacks
 
 * Tier 2 run time: the default Yosys `abc` script (`&fraig -x; scorr; dc2; dretime; &dch -f; &nf`)
-  took about 90 minutes per `NUM_PE=4, Q_FRAC=12` configuration (6 parallel jobs), against 4-15
-  minutes for the others; the full sweep took 101 minutes. All 18 completed with the default script.
+  took 76-97 minutes per `NUM_PE=4, Q_FRAC=12` configuration (6 parallel jobs), against 3-39
+  minutes for the others; the full sweep took 133 minutes. All 18 completed with the default script.
   `gs4d_flow.py synth --fast-abc` is available as a labelled fallback (`abc -fast`). It was measured
-  on `NUM_PE=4, CACHE_WAYS=1, Q_FRAC=8`: 59,128 gates / 270 levels against 51,268 / 335 with the
-  default script. Because the numbers differ, fallback results must not be mixed into this table.
-  `run_dse_sweep.py --resume` reuses finished `metrics.json` files after an interruption.
+  on `NUM_PE=4, CACHE_WAYS=1, Q_FRAC=8` (RTL revision before the review fixes): 59,128 gates /
+  270 levels against 51,268 / 335 with the default script. Because the numbers differ, fallback results must not be mixed into this table.
+  `run_dse_sweep.py --resume` reuses a finished `metrics.json` only when its `source_sha256` (RTL, scripts, parameters) still matches.
 * Tier 3: the bottleneck and the CEGAR finding are described in §5. No obligation in the final
   run used slicing or BMC fallback.
 
