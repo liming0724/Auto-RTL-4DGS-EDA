@@ -40,10 +40,15 @@ struct QFormat {
 
 using i128 = __int128;
 
+// Left shift that is defined for negative values in C++17 (two's complement).
+inline i128 shl(i128 x, int s) {
+  return static_cast<i128>(static_cast<unsigned __int128>(x) << s);
+}
+
 // Arithmetic shift right of `x` by `s` >= 0 bits with the given rounding.
 // Shifts of 127 or more collapse to the sign (trunc) or to the rounded limit.
 inline i128 shift_right_round(i128 x, int s, Round rnd) {
-  if (s <= 0) return x << (-s);
+  if (s <= 0) return shl(x, -s);
   if (s >= 127) {
     // |x| < 2^126 always holds for our widths, so the true value is in (-0.5, 0.5)
     // except for the floor of a negative number.
@@ -51,7 +56,7 @@ inline i128 shift_right_round(i128 x, int s, Round rnd) {
   }
   const i128 floor_q = x >> s;  // arithmetic shift: floor
   if (rnd == Round::kTrunc) return floor_q;
-  const i128 rem = x - (floor_q << s);  // in [0, 2^s)
+  const i128 rem = x - shl(floor_q, s);  // in [0, 2^s)
   const i128 half = i128{1} << (s - 1);
   if (rnd == Round::kHalfUp) return floor_q + (rem >= half ? 1 : 0);
   // kHalfEven
@@ -87,7 +92,7 @@ inline int64_t requantize(i128 x, int from_frac, QFormat to, Round rnd, Overflow
     const i128 lim = (i128{1} << (125 - ls));
     if (x >= lim) y = (i128{1} << 125);
     else if (x <= -lim) y = -(i128{1} << 125);
-    else y = x << ls;
+    else y = shl(x, ls);
   }
   return fit_width(y, to.width(), ovf);
 }
@@ -124,15 +129,15 @@ inline Fx fx_mul(const Fx& a, const Fx& b, QFormat out, FxMode m) {
 
 inline Fx fx_add(const Fx& a, const Fx& b, QFormat out, FxMode m) {
   const int f = a.fmt.frac_bits > b.fmt.frac_bits ? a.fmt.frac_bits : b.fmt.frac_bits;
-  const i128 s = (static_cast<i128>(a.raw) << (f - a.fmt.frac_bits)) +
-                 (static_cast<i128>(b.raw) << (f - b.fmt.frac_bits));
+  const i128 s = shl(a.raw, f - a.fmt.frac_bits) +
+                 shl(b.raw, f - b.fmt.frac_bits);
   return Fx{requantize(s, f, out, m.rnd, m.ovf), out};
 }
 
 inline Fx fx_sub(const Fx& a, const Fx& b, QFormat out, FxMode m) {
   const int f = a.fmt.frac_bits > b.fmt.frac_bits ? a.fmt.frac_bits : b.fmt.frac_bits;
-  const i128 s = (static_cast<i128>(a.raw) << (f - a.fmt.frac_bits)) -
-                 (static_cast<i128>(b.raw) << (f - b.fmt.frac_bits));
+  const i128 s = shl(a.raw, f - a.fmt.frac_bits) -
+                 shl(b.raw, f - b.fmt.frac_bits);
   return Fx{requantize(s, f, out, m.rnd, m.ovf), out};
 }
 
@@ -143,8 +148,8 @@ inline Fx fx_requant(const Fx& a, QFormat out, FxMode m) {
 // Exact comparison of two fixed-point values with possibly different formats.
 inline int fx_cmp(const Fx& a, const Fx& b) {
   const int f = a.fmt.frac_bits > b.fmt.frac_bits ? a.fmt.frac_bits : b.fmt.frac_bits;
-  const i128 x = static_cast<i128>(a.raw) << (f - a.fmt.frac_bits);
-  const i128 y = static_cast<i128>(b.raw) << (f - b.fmt.frac_bits);
+  const i128 x = shl(a.raw, f - a.fmt.frac_bits);
+  const i128 y = shl(b.raw, f - b.fmt.frac_bits);
   return x < y ? -1 : (x > y ? 1 : 0);
 }
 

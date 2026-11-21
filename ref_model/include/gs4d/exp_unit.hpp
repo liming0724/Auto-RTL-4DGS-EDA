@@ -49,7 +49,7 @@ class ExpUnit {
     if (y.raw >= 0) return fx_from_double(1.0, out, mode_);
     const int fy = cfg_.y_fmt.frac_bits;
     const int64_t n = y.raw >> fy;                  // floor, n <= -1
-    const int64_t f = y.raw - (n << fy);            // [0, 2^fy)
+    const int64_t f = y.raw - n * (int64_t{1} << fy);            // [0, 2^fy)
     const int64_t seg = f >> rbits();
     const int64_t r = f & ((int64_t{1} << rbits()) - 1);
     const int64_t pow2f = base_[seg] + ((slope_[seg] * r) >> rbits());  // Q1.table_frac
