@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <numeric>
 #include <random>
+#include <stdexcept>
 #include <string>
 
 #include "rasterizer.hpp"
@@ -45,6 +46,8 @@ inline std::vector<Gaussian4D> make_scene(const SceneConfig& sc, const TileConfi
 template <class P>
 void build_srams(const P& p, const std::vector<Gaussian4D>& gs, double t, int depth,
                  std::vector<Splat<typename P::V>>& sram1, std::vector<uint32_t>& sram0) {
+  if (gs.empty() || static_cast<int>(gs.size()) >= depth)
+    throw std::invalid_argument("build_srams: need 1 <= gaussians < SRAM depth (room for the null splat)");
   sram1 = deform_frame(p, gs, t);
   std::vector<uint32_t> order(sram1.size());
   std::iota(order.begin(), order.end(), 0u);

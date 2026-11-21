@@ -55,6 +55,10 @@ int main(int argc, char** argv) {
     else if (!std::strcmp(argv[i], "--out")) out = next();
     else { std::fprintf(stderr, "usage: %s [--seed S] [--n N] [--t T] [--out DIR]\n", argv[0]); return 2; }
   }
+  if (sc.num_gaussians < 1 || sc.num_gaussians >= sc.sram_depth) {
+    std::fprintf(stderr, "--n must be in [1, %d]\n", sc.sram_depth - 1);
+    return 2;
+  }
   const TileConfig tc;
   const auto scene = make_scene(sc, tc);
   F32Policy pf;
