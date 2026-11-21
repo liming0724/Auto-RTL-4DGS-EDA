@@ -93,6 +93,6 @@ generation:
 ---
 
 ## Roadmap for Autonomous DSE
-- [ ] Transpile 4DGS spatiotemporal deformation and rasterization kernels into a bit-true C++ fixed-point reference model.
+- [x] Transpile 4DGS spatiotemporal deformation and rasterization kernels into a bit-true C++ fixed-point reference model. See [`ref_model/`](ref_model/README.md); plan for the next two items in [`docs/ROADMAP_PLAN.md`](docs/ROADMAP_PLAN.md).
 - [ ] Parameterize `GS_RASTERIZER_pipeline.v` across PE array widths, Q-format bit-widths, and motion-aware cache associativity.
 - [ ] Execute parallel Area-Delay Pareto frontier sweeps via Yosys + ABC + Z3 verification loops.
