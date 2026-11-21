@@ -80,7 +80,8 @@ def synth(cfg, out, tools):
         f"read_verilog {q(str(converted))}", *params,
         f"synth -top {TOP} -flatten -noabc", f"rename -top {TOP}", "setundef -zero", "check -assert",
         f"write_json {q(str(out / 'pre.json'))}",
-        f"abc -exe {q(tools.abc)} -g AND,OR,XOR,MUX", "check -assert", "stat",
+        f"abc -exe {q(tools.abc)}{' -fast' if getattr(tools, 'fast_abc', False) else ''} -g AND,OR,XOR,MUX",
+        "check -assert", "stat",
         f"write_json {q(str(out / 'mapped.json'))}",
     ]) + "\n", encoding="utf-8")
     log = run([tools.yosys, "-QT", "-s", str(script)], ROOT, out / "synth.log", timeout=7200)
@@ -118,6 +119,8 @@ def main():
     ap.add_argument("--cache-sets", type=int, default=DEFAULT["cache_sets"])
     ap.add_argument("--thresh", type=int, nargs="+", default=[0, 16])
     ap.add_argument("--out", type=Path, default=ROOT / "build/4dgs")
+    ap.add_argument("--fast-abc", action="store_true",
+                    help="Yosys 'abc -fast' mapping (no &fraig/scorr/&dch) for designs where the default script stalls")
     ap.add_argument("--verilator", default="verilator")
     ap.add_argument("--yosys", default="yosys")
     ap.add_argument("--sv2v", default="sv2v")
@@ -136,8 +139,8 @@ def main():
                   f"skip_rate={r['skip_rate']:.4f} cycle_reduction={100 * (1 - 1 / r['speedup']):.2f}% "
                   f"speedup={r['speedup']:.4f}x")
     else:
-        s = synth(cfg, out / "synth", args)
-        print(f"synth {tag(cfg)} (generic-cell): gates={s['mapped']['generic_gates']} "
+        s = synth(cfg, out / ("synth_fast" if args.fast_abc else "synth"), args)
+        print(f"synth {tag(cfg)}{' abc -fast' if args.fast_abc else ''} (generic-cell): gates={s['mapped']['generic_gates']} "
               f"ffs={s['mapped']['flip_flops']} aig_and={s['optimized']['and_nodes']} "
               f"aig_levels={s['optimized']['levels']} opaque_sram_ways={s['mapped']['opaque_macros']} "
               f"sram_bits={s['sram_bits']} CEC {s['cec']}")
