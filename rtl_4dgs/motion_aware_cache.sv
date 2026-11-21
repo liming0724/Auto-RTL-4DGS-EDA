@@ -58,7 +58,9 @@ module motion_aware_cache #(
     logic                 resp_same_set;
 
     function automatic logic [WAY_W-1:0] rr_inc(input logic [WAY_W-1:0] r);
-        return CACHE_WAYS == 1 ? '0 : r + 1'b1;
+        if (CACHE_WAYS == 1) return '0;
+        if ((CACHE_WAYS & (CACHE_WAYS - 1)) != 0 && r == WAY_W'(CACHE_WAYS - 1)) return '0;
+        return r + 1'b1;
     endfunction
 
     assign wr_fire = wr_en & sel_valid;
