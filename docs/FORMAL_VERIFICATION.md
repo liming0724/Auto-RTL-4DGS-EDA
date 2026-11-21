@@ -1,7 +1,7 @@
 # Formal Verification (Tier 3): Z3, COI Slicing and CEGAR
 
 Phase 2 connects `eda_core/` to the `rtl_baseline/` netlists. Tier 3 runs only after
-tiers 1 and 2: `make formal_z3` depends on `cec_baseline`, which runs lint,
+tiers 1 and 2: netlisting (`formal_netlists`) depends on `cec_baseline`, also under `-j`, which runs lint,
 Verilator simulation, Yosys/ABC synthesis and ABC CEC first (`DEVIN.md`).
 
 ```bash
@@ -142,7 +142,9 @@ Steps:
 4. Replay with the existing testbench, `Vssim_sim_top --cegar cegar_trace.hex`
    (`rtl_baseline/sim/sim_main_ssim.cpp`). The golden binary from `make sim` must
    print `CEGAR PASS`. A Verilator build with the faulty copy must print
-   `CEGAR FAIL: cycle N`, with N equal to the predicted cycle.
+   `CEGAR FAIL: cycle N`, with N equal to the predicted cycle. The faulty build uses
+   `--trace` and writes `build/formal/cegar/<fault>/cegar_faulty.vcd` up to the failing
+   cycle, so the divergence can be checked at the signal level (`DEVIN.md` CEGAR step 3).
 
 `make test_cegar` takes about 3 minutes, most of it the faulty Verilator build.
 

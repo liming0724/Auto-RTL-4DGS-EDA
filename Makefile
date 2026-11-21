@@ -58,11 +58,11 @@ cec_baseline: synth_baseline
 build_eda:
 	$(MAKE) -C eda_core PYTHON="$(PYTHON)" OUT="$(abspath build/eda)"
 
-formal_netlists: build_eda
+# Netlisting waits for the tier 1-2 funnel (lint, simulation, synthesis, CEC), also under -j.
+formal_netlists: cec_baseline build_eda
 	$(PYTHON) scripts/formal/rtl_to_netlist.py --check $(FORMAL_TOOLS)
 
-# Tier 3 runs only after the tier 1-2 funnel (lint, simulation, synthesis, CEC) passes.
-formal_z3: cec_baseline formal_netlists
+formal_z3: formal_netlists
 	$(PYTHON) scripts/formal/verify_z3.py
 	$(PYTHON) scripts/formal/verify_z3.py --drill
 
