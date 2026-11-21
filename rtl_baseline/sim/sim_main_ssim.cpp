@@ -2,12 +2,17 @@
 #include <cstdint>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <random>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
 #include "Vssim_sim_top.h"
 #include "verilated.h"
+#if VM_TRACE
+#include "verilated_vcd_c.h"
+#endif
 
 namespace {
 constexpr int width = 16, height = 17, pixels = width * height;
@@ -136,15 +141,95 @@ int run(const Image& gt, const Image& img, const Image& scores) {
               << " checked windows, 65536 div8 cases, 0 mismatches\n";
     return 0;
 }
+
+// Replays a CEGAR witness (scripts/formal/cegar_to_verilator.py) on the shift window:
+// each line is "cycle shift_valid pixel window_valid p00 .. p22" (hex), with the
+// expected outputs sampled after that cycle's rising edge.
+// With a wave path and a --trace build, the replay also dumps a VCD up to the failing cycle.
+int replay(const char* path, const char* wave) {
+    if (wave) Verilated::traceEverOn(true);
+    Vssim_sim_top dut;
+#if VM_TRACE
+    std::unique_ptr<VerilatedVcdC> vcd;
+    if (wave) {
+        vcd.reset(new VerilatedVcdC);
+        dut.trace(vcd.get(), 99);
+        vcd->open(wave);
+    }
+#else
+    if (wave) std::cerr << "note: built without --trace, no VCD written\n";
+#endif
+    uint64_t time = 0;
+    auto eval = [&] {
+        dut.eval();
+#if VM_TRACE
+        if (vcd) vcd->dump(time);
+#endif
+        ++time;
+    };
+    auto finish = [&](int rc) {
+        dut.final();
+#if VM_TRACE
+        if (vcd) vcd->close();
+#endif
+        return rc;
+    };
+    for (int tick = 0; tick < 2; ++tick) {  // clocked reset, as in run()
+        dut.rst_n = 0;
+        dut.clk = 0;
+        eval();
+        dut.clk = 1;
+        eval();
+    }
+    dut.clk = 0;
+    dut.rst_n = 1;
+    eval();
+    std::ifstream in(path);
+    std::string line;
+    int checked = 0;
+    while (std::getline(in, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        std::istringstream fields(line);
+        uint64_t cycle, valid, pixel, expect_valid;
+        std::array<uint64_t, 9> expect{};
+        fields >> std::hex >> cycle >> valid >> pixel >> expect_valid;
+        for (auto& tap : expect) fields >> tap;
+        if (!fields) throw std::runtime_error("bad CEGAR trace line: " + line);
+        dut.clk = 0;
+        dut.shift_valid = valid;
+        dut.pixel = pixel;
+        eval();
+        dut.clk = 1;
+        eval();
+        const std::array<uint64_t, 9> actual{dut.p00, dut.p01, dut.p02, dut.p10, dut.p11,
+                                             dut.p12, dut.p20, dut.p21, dut.p22};
+        if (dut.window_valid != expect_valid || actual != expect) {
+            std::cout << "CEGAR FAIL: cycle " << cycle << " window_valid=" << int(dut.window_valid)
+                      << " (expected " << expect_valid << ")";
+            for (int i = 0; i < 9; ++i)
+                if (actual[i] != expect[i])
+                    std::cout << ", p" << i / 3 << i % 3 << "=" << std::hex << actual[i]
+                              << " (expected " << expect[i] << ")" << std::dec;
+            std::cout << '\n';
+            return finish(1);
+        }
+        ++checked;
+    }
+    std::cout << "CEGAR PASS: " << checked << " replayed cycles match the trace\n";
+    return finish(0);
+}
 }  // namespace
 
 int main(int argc, char** argv) {
-    if (argc != 4) {
-        std::cerr << "usage: Vssim_sim_top gt.txt img.txt ssim_golden.txt\n";
+    Verilated::commandArgs(argc, argv);
+    const bool cegar = (argc == 3 || argc == 4) && std::string(argv[1]) == "--cegar";
+    if (argc != 4 && !cegar) {
+        std::cerr << "usage: Vssim_sim_top gt.txt img.txt ssim_golden.txt\n"
+                     "       Vssim_sim_top --cegar cegar_trace.hex [wave.vcd]\n";
         return 2;
     }
-    Verilated::commandArgs(argc, argv);
     try {
+        if (cegar) return replay(argv[2], argc == 4 ? argv[3] : nullptr);
         return run(load_hex(argv[1]), load_hex(argv[2]), load_hex(argv[3]));
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

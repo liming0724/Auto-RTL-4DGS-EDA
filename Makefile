@@ -22,7 +22,9 @@ SSIM_LINT := $(LINT)
 GS_LINT := $(LINT) -Wno-CASEINCOMPLETE
 VERILATOR_BUILD := --cc --exe --build -O2
 
-.PHONY: lint lint_ssim lint_gs sim sim_ssim sim_gs synth_baseline cec_baseline
+FORMAL_TOOLS = --yosys "$(YOSYS)" --sv2v "$(SV2V)" --abc "$(ABC)"
+
+.PHONY: lint lint_ssim lint_gs sim sim_ssim sim_gs synth_baseline cec_baseline build_eda formal_netlists formal_z3 test_cegar
 lint: lint_ssim lint_gs
 
 lint_ssim:
@@ -52,3 +54,18 @@ synth_baseline: sim
 
 cec_baseline: synth_baseline
 	$(PYTHON) scripts/synth/baseline.py cec --abc "$(ABC)"
+
+build_eda:
+	$(MAKE) -C eda_core PYTHON="$(PYTHON)" OUT="$(abspath build/eda)"
+
+# Netlisting waits for the tier 1-2 funnel (lint, simulation, synthesis, CEC), also under -j.
+formal_netlists: cec_baseline build_eda
+	$(PYTHON) scripts/formal/rtl_to_netlist.py --check $(FORMAL_TOOLS)
+
+formal_z3: formal_netlists
+	$(PYTHON) scripts/formal/verify_z3.py
+	$(PYTHON) scripts/formal/verify_z3.py --drill
+
+test_cegar: formal_z3 $(BUILD)/ssim/Vssim_sim_top
+	$(PYTHON) scripts/formal/cegar_to_verilator.py $(FORMAL_TOOLS) --verilator "$(VERILATOR)" \
+		--lint-flags "$(SSIM_LINT)" --golden-bin $(BUILD)/ssim/Vssim_sim_top

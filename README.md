@@ -65,8 +65,7 @@ To prevent formal solver timeouts and state explosion during automated DSE, all 
 
 ### Build the C++ EDA Extension
 ```bash
-cd eda_core
-c++ -O3 -Wall -shared -std=c++17 -fPIC $(python3 -m pybind11 --includes) fast_eda.cpp -o fast_eda$(python3-config --extension-suffix)
+make build_eda           # eda_core/Makefile: -O3 -std=c++17 -fPIC, output in build/eda/
 ```
 
 ### Run the RTL Baseline
@@ -74,10 +73,13 @@ c++ -O3 -Wall -shared -std=c++17 -fPIC $(python3 -m pybind11 --includes) fast_ed
 make lint
 make -j2 sim             # or sim_ssim / sim_gs
 make -j2 cec_baseline    # runs simulation, generic synthesis, then ABC CEC
+make formal_z3           # Tier 3: Z3 proofs with 30 s / 3-retry / COI / BMC-20 breakers
+make test_cegar          # injected fault -> Z3 SAT -> cegar_trace.hex -> Verilator FAIL
 ```
 
 See [Baseline metrics](docs/BASELINE_METRICS.md) for setup, expected results, and
-which IP and SRAM boundaries are excluded from the generic metrics.
+which IP and SRAM boundaries are excluded from the generic metrics, and
+[Formal verification](docs/FORMAL_VERIFICATION.md) for the Tier 3 flow.
 
 ### Configure the EDA Agent
 
