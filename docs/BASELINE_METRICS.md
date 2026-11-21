@@ -173,4 +173,5 @@ Networks are equivalent.  Time =     0.02 sec
 Networks are equivalent.  Time =     0.01 sec
 ```
 
-Tier 3 (Z3 corner-case proofs) was not run for this Phase 1 baseline.
+Tier 3 (Z3 corner-case proofs) was not run for this Phase 1 baseline; Phase 2 adds it
+as `make formal_z3` / `make test_cegar` ([Formal verification](FORMAL_VERIFICATION.md)).

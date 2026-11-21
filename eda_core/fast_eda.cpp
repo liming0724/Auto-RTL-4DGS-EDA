@@ -25,6 +25,28 @@ public:
         }
     }
 
+    // Backward cone of influence of `roots`: every net in the cone and the cone's
+    // leaves (nets with no combinational driver: primary inputs, register outputs, cut points).
+    pair<vector<string>, vector<string>> cone_of_influence(const vector<string>& roots) const {
+        vector<string> cone, leaves;
+        unordered_set<string> seen(roots.begin(), roots.end());
+        vector<string> stack(roots.begin(), roots.end());
+        while (!stack.empty()) {
+            string net = stack.back();
+            stack.pop_back();
+            cone.push_back(net);
+            auto it = reverse_adj.find(net);
+            if (it == reverse_adj.end()) {
+                leaves.push_back(net);
+                continue;
+            }
+            for (const string& prev : it->second.second) {
+                if (seen.insert(prev).second) stack.push_back(prev);
+            }
+        }
+        return {cone, leaves};
+    }
+
     vector<string> find_paths(const string& start_net, const string& end_net, const string& avoid_net, int max_paths, double time_limit_sec) {
         vector<string> all_paths;
         
@@ -111,5 +133,6 @@ PYBIND11_MODULE(fast_eda, m) {
     py::class_<FastGraph>(m, "FastGraph")
         .def(py::init<>())
         .def("add_net_driver", &FastGraph::add_net_driver)
-        .def("find_paths", &FastGraph::find_paths);
+        .def("find_paths", &FastGraph::find_paths)
+        .def("cone_of_influence", &FastGraph::cone_of_influence);
 }

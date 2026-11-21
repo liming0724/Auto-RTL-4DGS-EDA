@@ -11,7 +11,7 @@ permissions:
 jobs:
   baseline:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Install EDA tools
@@ -24,5 +24,11 @@ jobs:
           echo 'ff8c9eea5bc029b372fb4953427625cddb7cf7e58c1240623ac9f260818d5a00  sv2v.zip' | sha256sum -c -
           unzip -q sv2v.zip
           echo "$RUNNER_TEMP/sv2v/sv2v-Linux" >> "$GITHUB_PATH"
+      - name: Install formal Python dependencies
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install z3-solver==5.4.1.0 pybind11==2.13.6
       - name: Lint, simulate, synthesize, and prove equivalence
         run: make -j2 cec_baseline
+      - name: Z3 formal checks and CEGAR self-test
+        run: make test_cegar PYTHON="$RUNNER_TEMP/venv/bin/python"
