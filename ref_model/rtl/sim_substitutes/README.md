@@ -22,4 +22,10 @@ Scope and limits:
 * **Bit-exactness against the real DesignWare models is not verified.** The
   same testbench (`ref_model/verif/tb_gs_rasterizer.cpp` / `run_rtl_sim.sh`)
   must be re-run against the real DW simulation models in the lab Synopsys
-  environment to close that gap.
+environment to close that gap.
+
+`ssim_fp16.v` is a separate clean-room binary16 model for SSIM's add, sum3,
+multiply, and divide instances. It uses round-to-nearest-even and gradual
+underflow; operator status is not modeled. It defines some of the same module
+names as the GS models and must be compiled in a separate Verilator invocation.
+It likewise must not be read by synthesis tools.

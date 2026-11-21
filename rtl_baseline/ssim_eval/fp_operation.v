@@ -241,25 +241,26 @@ module fp16_div8 (
             };
         end
         else if (exp_in == 5'd1) begin
-            fp_out = {
+            // Preserve the legacy low 16 bits of the 17-bit concatenation.
+            fp_out = 16'({
                 sign_in,
                 5'd0,
                 one_plus_man >> 3
-            };
+            });
         end
         else if (exp_in == 5'd2) begin
-            fp_out = {
+            fp_out = 16'({
                 sign_in,
                 5'd0,
                 one_plus_man >> 2
-            };
+            });
         end
         else if (exp_in == 5'd3) begin
-            fp_out = {
+            fp_out = 16'({
                 sign_in,
                 5'd0,
                 one_plus_man >> 1
-            };
+            });
         end
         else begin
             fp_out = {

@@ -20,9 +20,12 @@ module DW_fp_i2flt #(
 );
 /* verilator lint_on UNUSED */
 `include "dw_sub_fp_common.vh"
+    integer value;
+    initial if (isize > 24)
+        $fatal(1, "DW_fp_i2flt simulation substitute requires isize <= 24 (got %0d)", isize);
     assign status = 8'b0;
     always @* begin
-        if (isign != 0) z = dwsub_r2f($itor($signed(a)));
-        else            z = dwsub_r2f($itor({1'b0, a}));
+        value = (isign != 0) ? int'($signed(a)) : int'(a);
+        z = dwsub_r2f(real'(value));
     end
 endmodule

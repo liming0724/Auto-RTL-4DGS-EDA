@@ -1,0 +1,2 @@
+read_verilog -lib -sv scripts/synth/dw_interfaces.v
+read_verilog -lib -sv rtl_baseline/ssim_eval/SRAM_other.v

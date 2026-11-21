@@ -1,0 +1,8 @@
+read_blif mapped.blif
+strash
+print_stats
+refactor
+rewrite
+balance
+print_stats
+write_blif optimized.blif

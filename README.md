@@ -69,13 +69,15 @@ cd eda_core
 c++ -O3 -Wall -shared -std=c++17 -fPIC $(python3 -m pybind11 --includes) fast_eda.cpp -o fast_eda$(python3-config --extension-suffix)
 ```
 
-### Run Baseline RTL Functional Simulation (Verilator / Icarus Verilog)
+### Run the RTL Baseline
 ```bash
-# Example: Simulating the pipelined fixed-point SSIM baseline
-cd rtl_baseline/ssim_eval
-iverilog -o sim_ssim SSIM_v2.v ssim_custom_shift_safe.v fp_operation.v SRAM_IMG_GT.v SRAM_other.v TB.v
-vvp sim_ssim
+make lint
+make -j2 sim             # or sim_ssim / sim_gs
+make -j2 cec_baseline    # runs simulation, generic synthesis, then ABC CEC
 ```
+
+See [Baseline metrics](docs/BASELINE_METRICS.md) for setup, expected results, and
+which IP and SRAM boundaries are excluded from the generic metrics.
 
 ### Configure the EDA Agent
 

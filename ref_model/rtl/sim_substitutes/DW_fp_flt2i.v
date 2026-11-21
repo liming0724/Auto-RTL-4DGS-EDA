@@ -31,7 +31,7 @@ module DW_fp_flt2i #(
         else if (r >= MAXV)              z = {isize{1'b1}};
         else begin
             if ((r - fl) > 0.5 || ((r - fl) == 0.5 && ($rtoi(fl) % 2) == 1)) fl = fl + 1.0;
-            z = $rtoi(fl);
+            z = isize'($rtoi(fl));
         end
     end
 endmodule
