@@ -26,7 +26,7 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gs4d_flow import ROOT, build_sim, sim, synth, tag  # noqa: E402  pylint: disable=wrong-import-position
+from gs4d_flow import ROOT, build_sim, sim, source_digest, synth, tag  # noqa: E402  pylint: disable=wrong-import-position
 
 NUM_PE = (1, 2, 4)
 CACHE_WAYS = (1, 2, 4)
@@ -42,11 +42,8 @@ def evaluate(cfg, args):
     binary = build_sim(cfg, out, args.verilator)
     sims = {th: sim(cfg, th, binary, out) for th in MOTION_THRESH}
     cached = out / "synth/metrics.json"
-    if args.resume and cached.is_file():
-        syn = json.loads(cached.read_text(encoding="utf-8"))
-        if syn.get("cec") != "PASS":
-            raise ValueError(f"{tag(cfg)}: cached synthesis has no CEC PASS; rerun without --resume")
-    else:
+    syn = json.loads(cached.read_text(encoding="utf-8")) if args.resume and cached.is_file() else None
+    if syn is None or syn.get("cec") != "PASS" or syn.get("source_sha256") != source_digest(cfg, args):
         syn = synth(cfg, out / "synth", args)
     print(f"  {tag(cfg)}: done in {time.monotonic() - t0:.0f}s", flush=True)
     return cfg, sims, syn
@@ -68,7 +65,7 @@ def main():
     ap.add_argument("--out", type=Path, default=ROOT / "build/dse")
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--resume", action="store_true",
-                    help="reuse build/dse/<cfg>/synth/metrics.json from a previous run (simulation always reruns)")
+                    help="reuse build/dse/<cfg>/synth/metrics.json if its source_sha256 matches (simulation always reruns)")
     ap.add_argument("--verilator", default="verilator")
     ap.add_argument("--yosys", default="yosys")
     ap.add_argument("--sv2v", default="sv2v")

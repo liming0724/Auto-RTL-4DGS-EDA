@@ -9,6 +9,7 @@ scripts/dse/run_dse_sweep.py).
 All numbers are generic-cell Yosys/ABC metrics, not a 130nm standard-cell measurement.
 """
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -65,6 +66,15 @@ def sim(cfg, thresh, binary, out):
     return res
 
 
+def source_digest(cfg, tools):
+    """Identity of every input that determines a configuration's synthesis metrics."""
+    h = hashlib.sha256(json.dumps([cfg, bool(getattr(tools, "fast_abc", False))], sort_keys=True).encode())
+    for f in [*RTL_FILES, RTL / "gs4d_fx.svh", ROOT / "scripts/dse/gs4d_sram_interfaces.v", Path(__file__),
+              ROOT / "scripts/synth/aig.abc", ROOT / "scripts/synth/cec.abc", ROOT / "scripts/synth/baseline.py"]:
+        h.update(f.read_bytes())
+    return h.hexdigest()
+
+
 def synth(cfg, out, tools):
     out.mkdir(parents=True, exist_ok=True)
     for name in ("metrics.json", "optimized.blif", "cec.log"):
@@ -104,6 +114,7 @@ def synth(cfg, out, tools):
     w = 8 + cfg["q_frac"]
     tag_w = 12 - (cfg["cache_sets"] - 1).bit_length()
     stats["sram_bits"] = cfg["cache_ways"] * cfg["cache_sets"] * (tag_w + 6 * w)
+    stats["source_sha256"] = source_digest(cfg, tools)
     (out / "metrics.json").write_text(json.dumps(stats, indent=2) + "\n", encoding="utf-8")
     if stats["cec"] != "PASS":
         raise ValueError(f"{tag(cfg)}: CEC failed or inconclusive; see {out / 'cec.log'}")
