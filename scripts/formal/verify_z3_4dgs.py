@@ -15,7 +15,9 @@ Targets (small formal configurations, see rtl_to_netlist.py G4_TARGETS):
                   register / output is independent of the cache contents, i.e. equal
                   to full evaluation), backpressure freeze (no state, output or cache
                   change while out_ready == 0), legal FSM, ranking function (no
-                  deadlock), BMC-20 liveness from reset
+                  deadlock through PROJ/DIV/INV), BMC-20 safety from reset.
+                  Full recompute latency exceeds 20: liveness is proved by the
+                  unbounded inductive control invariant and decreasing rank, not BMC.
 """
 import argparse
 import json
@@ -32,8 +34,10 @@ BV = z3.BitVecVal
 SETS, WAYS, DW, TAG = 4, 2, 8, 2
 WORD = DW + TAG
 SKIP_W = 16
-S_ACCEPT, S_LOOKUP, S_PROJ, S_RASTER, S_OUT = range(5)
+S_ACCEPT, S_LOOKUP, S_PROJ, S_RASTER, S_OUT, S_DIV, S_INV = range(7)
 RASTER_CYCLES = 4  # TILE / NUM_PE
+DIV_BITS = 17  # 2*Q_FRAC+1, Q_FRAC=8 in gs4d_top
+CONTROL = ("state", "cnt", "phase", "div_count")
 
 
 def bit(v, i):
@@ -161,10 +165,28 @@ def cache_props(nl):
 
 
 # ---------------------------------------------------------------- accelerator top
+def control_inv(get, c):
+    s, k, p, d = (get(n, c) for n in CONTROL)
+    return z3.And(z3.ULE(s, S_INV),
+                  z3.Implies(s == S_RASTER, z3.ULE(k, RASTER_CYCLES-1)),
+                  z3.Implies(s == S_PROJ, z3.Or(z3.ULE(p, 5), z3.And(z3.UGE(p, 7), z3.ULE(p, 9)))),
+                  z3.Implies(s == S_DIV, z3.And(p == 6, z3.ULT(d, DIV_BITS))),
+                  z3.Implies(s == S_INV, z3.And(p == 6, d == DIV_BITS)))
+
+
+def progress_rank(get, c):
+    s, k, p, d = (get(n, c) for n in CONTROL)
+    widen = lambda x: z3.ZeroExt(8-x.size(), x)
+    return z3.If(s == S_LOOKUP, BV(32, 8), z3.If(s == S_PROJ,
+                 z3.If(z3.ULE(p, 5), BV(31, 8)-widen(p), BV(14, 8)-widen(p)),
+                 z3.If(s == S_DIV, BV(25, 8)-widen(d), z3.If(s == S_INV, BV(8, 8),
+                 z3.If(s == S_RASTER, BV(RASTER_CYCLES, 8)-widen(k), BV(0, 8))))))
+
+
 def top_props(nl):
     cur = lambda n, c: nl.bv(nl.nets(n), c)
     nxt = lambda n, c: nl.bv(nl.next_nets(n), c)
-    state, cnt = (lambda c: cur("state", c)), (lambda c: cur("cnt", c))
+    state = lambda c: cur("state", c)
     state_d = nl.next_nets("state")
     cache_q = sorted(q for q in nl.regs if q.startswith("u_cache_"))
     alt = [(z3.Bool(q), z3.Bool(q + "#alt")) for q in cache_q]
@@ -186,22 +208,33 @@ def top_props(nl):
     cache_state = ["u_cache_valid_q", "u_cache_rr_q"] + [f"u_cache_g_way_{w}__u_sram_rows" for w in range(WAYS)]
     stall = lambda c: z3.And(state(c) == S_OUT, cur("out_ready", c) == 0)
 
-    def rank(s, k):
-        return z3.If(s == S_LOOKUP, BV(10, 4), z3.If(s == S_PROJ, BV(9, 4) - z3.ZeroExt(2, k), z3.If(
-            s == S_RASTER, BV(RASTER_CYCLES, 4) - z3.ZeroExt(2, k), BV(0, 4))))
-
-    busy = lambda c: z3.Or(state(c) == S_LOOKUP, state(c) == S_PROJ, state(c) == S_RASTER)
+    busy = lambda c: z3.And(state(c) != S_ACCEPT, state(c) != S_OUT)
+    control_roots = sum((nl.next_nets(n) for n in CONTROL), [])
+    reset_control = [nl.expr(q) == z3.BoolVal(bool(nl.regs[q]["reset_value"]))
+                     for n in CONTROL for q in nl.nets(n)]
+    reset_skip = [nl.expr(q) == z3.BoolVal(bool(nl.regs[q]["reset_value"]))
+                  for n in ("skip_q", "out_skipped") for q in nl.nets(n)]
     hold_roots = state_d + sum((nl.next_nets(n) for n in out_regs + cache_state), [])
     return [
         ("lossless: motion_thresh == 0 -> skip_deform == 0", "unsat", [("skip_deform", nl.nets("skip_deform"),
             lambda c: z3.And(cur("motion_thresh", c) == 0, cur("skip_deform", c) == 1))]),
+        ("lossless base: skip_q and out_skipped are zero at reset", "unsat", [(
+            "reset_skip", nl.nets("skip_q") + nl.nets("out_skipped"), lambda c: z3.And(*reset_skip,
+                z3.Or(cur("skip_q", c) != 0, cur("out_skipped", c) != 0)))]),
         ("lossless: skip_q == 0 and out_skipped == 0 are inductive under motion_thresh == 0", "unsat", [(
             "skip_q/out_skipped", nl.next_nets("skip_q") + nl.next_nets("out_skipped"), lambda c: z3.And(
                 lossless(c), z3.Or(nxt("skip_q", c) != 0, nxt("out_skipped", c) != 0)))]),
+        ("lossless: every LOOKUP enters full recompute at PROJ phase 0", "unsat", [(
+            "recompute", state_d + nl.next_nets("phase"), lambda c: z3.And(lossless(c), state(c) == S_LOOKUP,
+                z3.Or(nxt("state", c) != S_PROJ, nxt("phase", c) != 0)))]),
         ("skip equivalence: under motion_thresh == 0 every datapath/control register is independent "
          "of cache contents (== full evaluation)", "unsat", [noninterference(n) for n in sorted(groups)]),
-        ("FSM closed over legal states (0..4)", "unsat", [("state_next", state_d, lambda c: z3.And(
-            z3.ULE(state(c), S_OUT), z3.UGT(nxt("state", c), S_OUT)))]),
+        ("FSM closed over legal states (0..6), including DIV/INV", "unsat", [("state_next", state_d, lambda c: z3.And(
+            z3.ULE(state(c), S_INV), z3.UGT(nxt("state", c), S_INV)))]),
+        ("base: control invariant (state/cnt/phase/div_count) holds at reset", "unsat", [(
+            "reset_control", control_roots, lambda c: z3.And(*reset_control, z3.Not(control_inv(cur, c))))]),
+        ("inductive: legal phase and divider count in every reachable control state", "unsat", [(
+            "control_next", control_roots, lambda c: z3.And(control_inv(cur, c), z3.Not(control_inv(nxt, c))))]),
         ("backpressure: out_ready == 0 in OUT freezes state, outputs and cache arrays/valid/LRU; no accept",
          "unsat", [("hold", hold_roots, lambda c: z3.And(stall(c), z3.Or(
              nxt("state", c) != S_OUT, cur("in_ready", c) != 0,
@@ -209,30 +242,75 @@ def top_props(nl):
         ("handshakes: OUT & out_ready -> ACCEPT, ACCEPT & in_valid -> LOOKUP", "unsat", [("state_next", state_d,
             lambda c: z3.Or(z3.And(state(c) == S_OUT, cur("out_ready", c) == 1, nxt("state", c) != S_ACCEPT),
                             z3.And(state(c) == S_ACCEPT, cur("in_valid", c) == 1, nxt("state", c) != S_LOOKUP)))]),
+        ("handshakes: in_ready iff ACCEPT, out_valid iff OUT", "unsat", [(
+            "ready/valid", nl.nets("in_ready") + nl.nets("out_valid"), lambda c: z3.Or(
+                cur("in_ready", c) != b1(state(c) == S_ACCEPT), cur("out_valid", c) != b1(state(c) == S_OUT)))]),
         ("non-vacuity witness: with motion_thresh != 0 the result does depend on cache contents", "sat", [
             ("datapath_next", [nl.regs[q]["d"] for g in groups.values() for q in g], lambda c: z3.And(
                 cur("motion_thresh", c) != 0, z3.Or(*[(lambda e: e != z3.substitute(e, *alt))(
                     nl.bv([nl.regs[q]["d"] for q in sorted(g)], c)) for g in groups.values()])))]),
-        ("deadlock-free: rank(LOOKUP/PROJ/RASTER) strictly decreases every cycle", "unsat", [(
-            "rank", state_d + nl.next_nets("cnt"), lambda c: z3.And(busy(c), z3.Not(z3.ULT(
-                rank(nxt("state", c), nxt("cnt", c)), rank(state(c), cnt(c))))))]),
+        ("unbounded progress: positive rank in LOOKUP/PROJ/DIV/INV/RASTER strictly decreases", "unsat", [(
+            "rank", control_roots, lambda c: z3.And(control_inv(cur, c), busy(c), z3.Or(
+                progress_rank(cur, c) == 0, z3.UGT(progress_rank(cur, c), 32),
+                z3.Not(z3.ULT(progress_rank(nxt, c), progress_rank(cur, c))),
+                nxt("state", c) == S_ACCEPT)))]),
+    ]
+
+
+def divider_props(nl):
+    cur = lambda n, c: nl.bv(nl.nets(n), c)
+    nxt = lambda n, c: nl.bv(nl.next_nets(n), c)
+    maximum = (1 << 15)-1
+    div = lambda c: cur("state", c) == S_DIV
+    widen = lambda x: z3.ZeroExt(18-x.size(), x)
+    trial = lambda c: (widen(cur("remainder_q", c)) << 1) | widen(bit(cur("numerator", c), 16))
+    take = lambda c: z3.UGE(trial(c), widen(cur("denominator", c)))
+    specs = {
+        "quotient": lambda c: (cur("quotient", c) << 1) | z3.ZeroExt(16, b1(take(c))),
+        "remainder_q": lambda c: z3.Extract(len(nl.nets("remainder_q"))-1, 0,
+            z3.If(take(c), trial(c)-widen(cur("denominator", c)), trial(c))),
+        "numerator": lambda c: cur("numerator", c) << 1,
+    }
+    cones = [(f"{n}[{i}]", [nl.next_nets(n)[i]],
+              (lambda n, i: lambda c: z3.And(div(c), bit(nxt(n, c), i) != bit(specs[n](c), i)))(n, i))
+             for n in specs for i in range(len(nl.nets(n)))]
+    init = lambda c: z3.And(cur("state", c) == S_PROJ, cur("phase", c) == 5)
+    det_next = lambda c: z3.Extract(15, 0, nxt("denominator", c))
+    return [
+        ("divider: initialization rounds numerator from latched determinant, zeros quotient/remainder", "unsat", [(
+            "divide_init", sum((nl.next_nets(n) for n in ("numerator", "denominator", "quotient", "remainder_q")), []),
+            lambda c: z3.And(init(c), z3.Or(
+                widen(nxt("denominator", c)) != z3.ZeroExt(2, det_next(c)),
+                nxt("numerator", c) != BV(1 << 16, 17) + z3.LShR(z3.ZeroExt(1, det_next(c)), 1),
+                nxt("quotient", c) != 0, nxt("remainder_q", c) != 0)))]),
+        ("divider: det <= 0 latches degenerate at initialization", "unsat", [(
+            "degenerate_next", nl.next_nets("degenerate"), lambda c: z3.And(init(c),
+                nxt("degenerate", c) != b1(det_next(c) <= 0)))]),
+        ("divider: DIV preserves the latched denominator and degeneracy", "unsat", [(
+            "divide_hold", nl.next_nets("denominator") + nl.next_nets("degenerate"), lambda c: z3.And(div(c),
+                z3.Or(nxt("denominator", c) != cur("denominator", c), nxt("degenerate", c) != cur("degenerate", c))))]),
+        ("divider: degenerate or overflowing quotient -> FX_MAX, otherwise exact quotient", "unsat", [(
+            f"inv_q_next[{i}]", [nl.next_nets("inv_q")[i]], (lambda i: lambda c: z3.And(cur("state", c) == S_INV,
+                bit(nxt("inv_q", c), i) != bit(
+                z3.If(z3.Or(cur("degenerate", c) == 1, z3.UGT(cur("quotient", c), maximum)),
+                      BV(maximum, 16), z3.Extract(15, 0, cur("quotient", c))), i)))(i)) for i in range(16)]),
+        ("divider: bit-true radix-2 restoring quotient/remainder/numerator step", "unsat", cones),
     ]
 
 
 def top_bmc(nl, breaker):
-    """From reset with in_valid = out_ready = 1: out_valid within 3 + TILE/NUM_PE + 4 + 1 cycles,
-    and the FSM never leaves the legal range for BMC_DEPTH cycles."""
-    roots = nl.nets("out_valid") + nl.nets("state")
+    """BMC-20 checks control safety; inductive rank proves liveness beyond that horizon."""
+    roots = sum((nl.nets(n) for n in CONTROL), [])
     unrolled = Unrolled([(nl, "")], {"": roots}, BMC_DEPTH)
     env = [unrolled.var("", n, t) for t in range(BMC_DEPTH + 1) for n in nl.nets("in_valid") + nl.nets("out_ready")]
-    latency = 3 + RASTER_CYCLES + 4
     frame = lambda e, t: unrolled.at(nl, "", e, t)
-    no_out = z3.And(*[z3.Not(frame(nl.expr(nl.nets("out_valid")[0]), t)) for t in range(latency + 1)])
-    illegal = z3.Or(*[frame(z3.UGT(nl.bv(nl.nets("state")), S_OUT), t) for t in range(BMC_DEPTH + 1)])
+    get = lambda n, c: nl.bv(nl.nets(n), c)
+    illegal = z3.Or(*[frame(z3.Not(control_inv(get, None)), t) for t in range(BMC_DEPTH + 1)])
     start = time.monotonic()
     breaker.say(f"[{nl.target}] BMC-{BMC_DEPTH} from reset ({len(unrolled.regs[''])} registers in sequential COI)")
-    result, _, _ = breaker.solve([*unrolled.constraints, *env, z3.Or(no_out, illegal)], f"bmc-{BMC_DEPTH}")
-    return dict(name=f"BMC-{BMC_DEPTH} from reset: out_valid within {latency} cycles, state legal",
+    breaker.say("  Full recompute needs 33 edges to out_valid (>20); liveness uses the unbounded inductive rank, not a deeper BMC.")
+    result, _, _ = breaker.solve([*unrolled.constraints, *env, illegal], f"bmc-{BMC_DEPTH}")
+    return dict(name=f"BMC-{BMC_DEPTH} from reset: control invariant safety (liveness proved by rank)",
                 target=nl.target, status=str(result).upper(), method=f"BMC-{BMC_DEPTH}",
                 seconds=round(time.monotonic() - start, 2), cones=1, expect="unsat")
 
@@ -254,15 +332,30 @@ def main():
         for target in args.targets or list(PROPS):
             nl = Netlist(args.netlists / target, target)
             breaker.say(f"== {target}: {nl.gates} gates, {len(nl.regs)} registers")
-            for name, expect, cones in PROPS[target](nl):
+            checks = PROPS[target](nl)
+            if target == "gs4d_top":
+                checks += divider_props(nl)
+            for name, expect, cones in checks:
                 res = breaker.check(nl, name, cones)
-                res.pop("witness", None)
+                witness = res.pop("witness", None)
+                if witness is not None and expect == "unsat":
+                    model, failing = witness, res["failing_cones"]
+                    path = args.out / f"{target}_counterexample_{len(results)}.txt"
+                    path.write_text(model.sexpr() + "\n", encoding="utf-8")
+                    breaker.say(f"  SAT witness: failing cones {failing}; model saved to {path}")
+                    if target == "gs4d_top":
+                        for signal in (*CONTROL, "numerator", "quotient", "remainder_q", "denominator", "degenerate"):
+                            current = nl.bv(nl.nets(signal))
+                            following = nl.bv(nl.next_nets(signal))
+                            breaker.say(f"    {signal}[{current.size()}]: "
+                                        f"{model.eval(current, model_completion=True)} -> "
+                                        f"{model.eval(following, model_completion=True)}")
                 res["expect"], res["note"] = expect, None
                 results.append(res)
             if target == "gs4d_top":
                 results.append(top_bmc(nl, breaker))
         for res in results:
-            res["verdict"] = verdict(res)
+            res["verdict"] = "FAIL" if res["status"] == "BOUNDED" else verdict(res)
         summary = dict(z3=z3.get_version_string(), timeout_s=breaker.timeout_ms / 1000,
                        queries=breaker.queries, seconds=round(time.monotonic() - start, 2), results=results)
         (args.out / "formal_4dgs.json").write_text(json.dumps(summary, indent=1) + "\n", encoding="utf-8")

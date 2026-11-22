@@ -6,8 +6,10 @@
 //   ACCEPT : capture inputs, temporal_skip_unit decides skip_deform, issue cache lookup
 //   LOOKUP : cache response. skip_deform && hit -> reuse cached 2D attributes -> RASTER.
 //            Otherwise deform mu(t) = mu0 + dmu, s(t) = s0 + ds -> PROJ.
-//   PROJ   : 4 cycles on one shared fxmul (cov_a = sx^2, cov_c = sy^2, t = sx*sy,
-//            cov_b = rho*t); last cycle issues the non-blocking cache write-back.
+//   PROJ   : six covariance/determinant products on one shared fxmul, det subtract,
+//            2*F+1 restoring divide cycles, reciprocal setup, three conic products.
+//            Total 11+2*F cycles; final cycle writes the cache. out_cov_* and cache
+//            cov_* fields hold inverse covariance (conic a/b/c), not covariance.
 //   RASTER : TILE/NUM_PE cycles, NUM_PE gs4d_raster_lane instances per cycle.
 //   OUT    : hold result until out_ready.
 // Operand isolation: the covariance multiplier operands (proj_a/proj_b) and the
@@ -69,6 +71,10 @@ module gs4d_accelerator_top #(
     localparam logic [2:0] S_PROJ   = 3'd2;
     localparam logic [2:0] S_RASTER = 3'd3;
     localparam logic [2:0] S_OUT    = 3'd4;
+    localparam logic [2:0] S_DIV    = 3'd5;
+    localparam logic [2:0] S_INV    = 3'd6;
+    localparam int N = 2*F+1;
+    localparam int DIV_CW = $clog2(N);
 
     logic [2:0] state;
     logic [CNT_W-1:0] cnt;
@@ -80,6 +86,14 @@ module gs4d_accelerator_top #(
 
     // Projection datapath (operand-isolated).
     logic [W-1:0] sx_q, sy_q, proj_a, proj_b, proj_p;
+    logic [3:0] phase;
+    logic [W-1:0] ca_q, cb_q, cc_q, ac_q, det;
+    logic [W-1:0] inv_q, inv_next;
+    logic [N-1:0] numerator, quotient;
+    logic [N:0] remainder_q, denominator, trial, remainder_next;
+    logic [N-1:0] quotient_next;
+    logic [DIV_CW-1:0] div_count;
+    logic degenerate;
 
     (* keep *) logic skip_deform;
     logic [W+1:0] skip_delta;
@@ -103,8 +117,13 @@ module gs4d_accelerator_top #(
     );
 
     assign proj_p   = fxmul(proj_a, proj_b);
-    assign cache_wr = state == S_PROJ && cnt == CNT_W'(3);
-    assign wr_data  = {out_mean_x, out_mean_y, out_cov_a, proj_p, out_cov_c, out_opacity};
+    assign cache_wr = state == S_PROJ && phase == 9;
+    assign wr_data  = {out_mean_x, out_mean_y, out_cov_a, fx_sub('0, proj_p), out_cov_c, out_opacity};
+    assign det = fx_sub(ac_q, proj_p);
+    assign trial = (remainder_q << 1) | (N+1)'(numerator[N-1]);
+    assign remainder_next = trial >= denominator ? trial - denominator : trial;
+    assign quotient_next = {quotient[N-2:0], trial >= denominator};
+    assign inv_next = degenerate || quotient > N'(FX_MAX) ? FX_MAX : W'(quotient);
 
     motion_aware_cache #(
         .CACHE_SETS(CACHE_SETS),
@@ -154,6 +173,9 @@ module gs4d_accelerator_top #(
             s0x_q  <= '0; s0y_q  <= '0; dsx_q  <= '0; dsy_q  <= '0;
             rho_q  <= '0; opa_q  <= '0; pix_x0_q <= '0; pix_y_q <= '0;
             sx_q   <= '0; sy_q   <= '0; proj_a <= '0; proj_b <= '0;
+            phase <= '0; ca_q <= '0; cb_q <= '0; cc_q <= '0; ac_q <= '0;
+            inv_q <= '0; numerator <= '0; quotient <= '0; remainder_q <= '0;
+            denominator <= '0; div_count <= '0; degenerate <= 1'b0;
             out_mean_x <= '0; out_mean_y <= '0; out_cov_a <= '0;
             out_cov_b  <= '0; out_cov_c  <= '0; out_opacity <= '0;
             out_alpha  <= '0;
@@ -186,21 +208,46 @@ module gs4d_accelerator_top #(
                         sy_q   <= fx_add(s0y_q, dsy_q);
                         proj_a <= fx_add(s0x_q, dsx_q);
                         proj_b <= fx_add(s0x_q, dsx_q);
+                        phase <= '0;
                         state  <= S_PROJ;
                     end
                 end
                 S_PROJ: begin
-                    cnt <= cnt + 1'b1;
-                    case (cnt)
-                        CNT_W'(0): begin out_cov_a <= proj_p; proj_a <= sy_q;  proj_b <= sy_q;   end
-                        CNT_W'(1): begin out_cov_c <= proj_p; proj_a <= sx_q;  proj_b <= sy_q;   end
-                        CNT_W'(2): begin                      proj_a <= rho_q; proj_b <= proj_p; end
+                    phase <= phase + 1'b1;
+                    case (phase)
+                        0: begin ca_q <= proj_p; proj_a <= sy_q; proj_b <= sy_q; end
+                        1: begin cc_q <= proj_p; proj_a <= sx_q; proj_b <= sy_q; end
+                        2: begin proj_a <= rho_q; proj_b <= proj_p; end
+                        3: begin cb_q <= proj_p; proj_a <= ca_q; proj_b <= cc_q; end
+                        4: begin ac_q <= proj_p; proj_a <= cb_q; proj_b <= cb_q; end
+                        5: begin
+                            numerator <= (N'(1) << (2*F)) + (N'(det) >> 1);
+                            denominator <= (N+1)'(det);
+                            degenerate <= $signed(det) <= 0;
+                            remainder_q <= '0; quotient <= '0; div_count <= '0;
+                            state <= S_DIV;
+                        end
+                        7: begin out_cov_a <= proj_p; proj_a <= ca_q; proj_b <= inv_q; end
+                        8: begin out_cov_c <= proj_p; proj_a <= cb_q; proj_b <= inv_q; end
                         default: begin
-                            out_cov_b <= proj_p;
+                            out_cov_b <= fx_sub('0, proj_p);
                             cnt   <= '0;
                             state <= S_RASTER;
                         end
                     endcase
+                end
+                S_DIV: begin
+                    numerator <= numerator << 1;
+                    remainder_q <= remainder_next;
+                    quotient <= quotient_next;
+                    div_count <= div_count + 1'b1;
+                    if (div_count == DIV_CW'(N-1)) state <= S_INV;
+                end
+                S_INV: begin
+                    inv_q <= inv_next;
+                    proj_a <= cc_q; proj_b <= inv_next;
+                    phase <= 7;
+                    state <= S_PROJ;
                 end
                 S_RASTER: begin
                     for (int l = 0; l < NUM_PE; l++)

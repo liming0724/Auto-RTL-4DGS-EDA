@@ -8,12 +8,12 @@
 //   delta     = |dmu_x| + |dmu_y| + |ds_x| + |ds_y|       (raw LSBs, L1 temporal norm)
 //   skip      = delta < MOTION_THRESH
 //   skip&&hit : reuse cached {mean_x, mean_y, cov_a, cov_b, cov_c, opacity}
-//   otherwise : mu(t) = mu0 + dmu, s(t) = s0 + ds, cov_a = sx^2, cov_c = sy^2,
-//               cov_b = rho * (sx * sy), write the cache (hit way, else first invalid
+//   otherwise : mu(t) = mu0 + dmu, s(t) = s0 + ds, invert covariance into
+//               cov_a/b/c (conic coefficients), write the cache (hit way, else first invalid
 //               way, else round-robin victim of the set)
 //   then TILE pixels (pix_x0 + k, pix_y) are shaded by NUM_PE lanes (Lane::alpha).
 // Cycle model (out_ready = 1, in_valid = 1): 3 + TILE/NUM_PE cycles per Gaussian,
-// plus 4 projection cycles when the covariance is recomputed.
+// plus 11 + 2*Q_FRAC projection cycles when the conic is recomputed.
 #pragma once
 
 #include <array>
@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "gs4d/fixed_point.hpp"
+#include "gs4d/scene.hpp"
 
 namespace gs4d_ref {
 
@@ -37,6 +38,7 @@ struct Config {
   uint32_t motion_thresh = 0;
   int w() const { return 8 + q_frac; }
   int raster_cycles() const { return kTile / num_pe; }
+  int projection_cycles() const { return 11 + 2 * q_frac; }
 };
 
 struct GaussIn {
@@ -47,6 +49,7 @@ struct GaussIn {
 };
 
 struct Attr {
+  // Historical cov_* names hold inverse covariance (conic a/b/c).
   int64_t mean_x = 0, mean_y = 0, cov_a = 0, cov_b = 0, cov_c = 0, opacity = 0;
   bool operator==(const Attr& o) const {
     return mean_x == o.mean_x && mean_y == o.mean_y && cov_a == o.cov_a &&
@@ -118,11 +121,71 @@ inline Attr project(const Fx& fx, const GaussIn& g) {
   a.mean_x = fx.add(g.mu0_x, g.dmu_x);
   a.mean_y = fx.add(g.mu0_y, g.dmu_y);
   const int64_t sx = fx.add(g.s0_x, g.ds_x), sy = fx.add(g.s0_y, g.ds_y);
-  a.cov_a = fx.mul(sx, sx);
-  a.cov_c = fx.mul(sy, sy);
-  a.cov_b = fx.mul(g.rho, fx.mul(sx, sy));
+  const int64_t ca = fx.mul(sx, sx), cc = fx.mul(sy, sy);
+  const int64_t cb = fx.mul(g.rho, fx.mul(sx, sy));
+  const int64_t det = fx.sub(fx.mul(ca, cc), fx.mul(cb, cb));
+  const int64_t max = (int64_t{1} << (fx.w() - 1)) - 1;
+  const int64_t inv = det <= 0 ? max : std::min(max, ((int64_t{1} << (2 * fx.frac())) + (det >> 1)) / det);
+  a.cov_a = fx.mul(cc, inv);
+  a.cov_c = fx.mul(ca, inv);
+  a.cov_b = fx.sub(0, fx.mul(cb, inv));
   a.opacity = g.opacity;
   return a;
+}
+
+struct ConicCheck {
+  uint64_t checked = 0, out_of_range = 0, saturated = 0, failures = 0;
+  void check(const Fx& fx, const GaussIn& g, const Attr& actual) {
+    const double unit = std::ldexp(1.0, -fx.frac()), eps = unit / 2;
+    const double sx = fx.add(g.s0_x, g.ds_x) * unit;
+    const double sy = fx.add(g.s0_y, g.ds_y) * unit, rho = g.rho * unit;
+    const auto ref = gs4d::conic_from_scale(sx, sy, rho);
+    const double A = sx*sx, C = sy*sy, B = rho*sx*sy, d = A*C-B*B;
+    const int64_t ca = fx.mul(fx.add(g.s0_x, g.ds_x), fx.add(g.s0_x, g.ds_x));
+    const int64_t cc = fx.mul(fx.add(g.s0_y, g.ds_y), fx.add(g.s0_y, g.ds_y));
+    const int64_t cb = fx.mul(g.rho, fx.mul(fx.add(g.s0_x, g.ds_x), fx.add(g.s0_y, g.ds_y)));
+    const int64_t det = fx.sub(fx.mul(ca, cc), fx.mul(cb, cb));
+    const int64_t max = (int64_t{1} << (fx.w()-1))-1;
+    const bool sat = det <= 0 || ((int64_t{1} << (2*fx.frac())) + (det >> 1))/det > max;
+    // Propagate half-LSB error through covariance, determinant, reciprocal and products.
+    const double eb = eps*(1+std::abs(rho));
+    const double ed = eps*(A+C)+eps*eps+2*std::abs(B)*eb+eb*eb+2*eps;
+    const double ei = d > ed ? ed/(d*(d-ed))+eps : INFINITY;
+    const double refs[] = {ref.a, ref.b, ref.c};
+    const double covs[] = {C, B, A}, errors[] = {eps, eb, eps};
+    const int64_t values[] = {actual.cov_a, actual.cov_b, actual.cov_c};
+    for (int i = 0; i < 3; ++i) {
+      if (!std::isfinite(refs[i]) || std::abs(refs[i]) > max*unit) { ++out_of_range; continue; }
+      if (sat) { ++saturated; continue; }
+      ++checked;
+      const double tol = errors[i]/d + (std::abs(covs[i])+errors[i])*ei + eps;
+      if (std::abs(values[i]*unit-refs[i]) > tol) ++failures;
+    }
+  }
+  void report(int f, std::FILE* out = stdout) const {
+    std::fprintf(out, "conic cross-check Q_FRAC=%d checked=%llu out_of_range=%llu inv_saturated=%llu failures=%llu\n",
+                f, (unsigned long long)checked, (unsigned long long)out_of_range,
+                (unsigned long long)saturated, (unsigned long long)failures);
+  }
+};
+
+inline GaussIn directed_conic(int f) {
+  GaussIn g;
+  g.s0_x = g.s0_y = int64_t{2} << f;
+  g.opacity = int64_t{1} << f;
+  g.pix_x0 = int64_t{1} << f;
+  return g;
+}
+
+inline std::vector<GaussIn> conic_edges(int f) {
+  auto zero = directed_conic(f);
+  zero.s0_x = zero.s0_y = 0;
+  auto singular = directed_conic(f);
+  singular.s0_x = singular.s0_y = int64_t{1} << f;
+  singular.rho = int64_t{1} << f;
+  auto tiny = singular;
+  tiny.rho = 0; tiny.s0_x = tiny.s0_y = 1;
+  return {zero, singular, tiny};
 }
 
 struct Stats {
@@ -169,7 +232,7 @@ class Accelerator {
     for (int k = 0; k < kTile; ++k)
       o.alpha[k] = lane_alpha(fx_, fx_.add(g.pix_x0, int64_t{k} << cfg_.q_frac), g.pix_y, o.attr);
     const int base = 3 + cfg_.raster_cycles();
-    o.cycles = base + (o.skipped ? 0 : 4);
+    o.cycles = base + (o.skipped ? 0 : cfg_.projection_cycles());
     if (st) {
       ++st->gaussians;
       st->skip_eligible += skip;
@@ -177,13 +240,13 @@ class Accelerator {
       st->recomputed += !o.skipped;
       st->cache_hits += hit_way >= 0;
       st->cycles += o.cycles;
-      st->cycles_noskip += base + 4;
-      // Projection: 4 deform adds + 4 covariance mults; raster: 8 mults + 4 adds/pixel.
+      st->cycles_noskip += base + cfg_.projection_cycles();
+      // Projection: 9 mults, 4 deform adds + det subtract + conic negation.
       const uint64_t rm = 8 * kTile, ra = 4 * kTile;
-      st->mults += rm + (o.skipped ? 0 : 4);
-      st->mults_noskip += rm + 4;
-      st->adds += ra + (o.skipped ? 0 : 4);
-      st->adds_noskip += ra + 4;
+      st->mults += rm + (o.skipped ? 0 : 9);
+      st->mults_noskip += rm + 9;
+      st->adds += ra + (o.skipped ? 0 : 6);
+      st->adds_noskip += ra + 6;
       const Attr full = project(fx_, g);
       for (int k = 0; k < kTile; ++k) {
         const int64_t af = lane_alpha(fx_, fx_.add(g.pix_x0, int64_t{k} << cfg_.q_frac), g.pix_y, full);

@@ -11,6 +11,17 @@
 
 ## 1. What was built
 
+The frame tables, §6 DSE tables and original synthesis/proof tables below are historical
+pre-conic-inversion measurements; §7 reports the corrected targeted rerun. The corrected projection uses inverse covariance
+in the historically named `cov_a/b/c` fields. Its FSM is
+`ACCEPT -> LOOKUP -> PROJ(phase 0..5) -> DIV(17 cycles at F=8) -> INV ->
+PROJ(phase 7..9) -> RASTER -> OUT`, with the existing cache-hit skip bypass.
+Projection costs `11+2*Q_FRAC` cycles; at F=8 the default transaction costs 34 active
+cycles including acceptance and output consumption (33 edges to `out_valid`).
+
+`gs4d_raster_lane` is a clean-room fixed-point per-pixel alpha stage corresponding to the original `rtl_baseline/gs_rasterizer/GS_RASTERIZER_pipeline.v` per-pixel dx/dy -> quadratic form (conic) -> exp -> alpha stages.
+It is parameterized by `NUM_PE` (lanes per cycle) and `Q_FRAC` (fraction bits).
+
 | Item | File(s) | Notes |
 |---|---|---|
 | Bit-true golden model | `golden_model/4dgs_ref.hpp`, `golden_model/4dgs_ref.cpp` | Q(7,`Q_FRAC`) signed fixed point (half-up rounding, saturation, same API as `ref_model/include/gs4d/fixed_point.hpp`); deformation `mu(t)=mu0+dmu(t)`, `s(t)=s0+ds(t)`; 2D covariance projection; L1 skip test; set-associative cache; CLI stimulus/trace generator (`--trace-dir`, `--sweep`) |
@@ -76,12 +87,31 @@ All 18 configurations are listed in §6. The datapath has single-cycle `fxmul` s
 half-up rounding and saturation in one combinational stage), so logic depth is expected to track
 the operand width (`Q_FRAC`) rather than `NUM_PE` or `CACHE_WAYS`; §6 shows the measured levels.
 
+### Corrected conic projection: default configuration
+
+Fresh Yosys 0.23 / Berkeley ABC **generic-cell** synthesis and both ABC CEC checks
+pass with the sequential restoring divider. These are area/depth proxies, not
+physical cell area, nanosecond delay or 130nm measurements. The historical sweep
+in §6 has not been rerun.
+
+| Metric | Pre-fix default above | Corrected default |
+|---|---:|---:|
+| Generic gates | 27,571 | 28,509 |
+| Flip-flops | 2,118 | 2,275 |
+| Optimized AIG AND nodes | 32,540 | 33,384 |
+| Optimized AIG logic levels | 339 | 335 |
+| Opaque SRAM ways / bits | 2 / 101,376 | 2 / 101,376 |
+| ABC CEC (both comparisons) | PASS | PASS |
+
+The pre-fix baseline is measured on merged main `1a30afc` (which includes the five review-fix commits after the PR #4 review: phase-counter sizing, round-robin victim wrap, `--resume` SHA256 check, per-pixel multiply count, and docs refresh), not on the PR #4 review head `4b0eabf`.
+
 ## 5. Tier 3 — Z3 proofs (eda_core, 30 s breaker, COI slicing, BMC-20)
 
 Netlists are produced by `scripts/formal/rtl_to_netlist.py` in small formal configurations
 (`gs4d_skip_unit`: W=16; `gs4d_cache`: 4 sets × 2 ways, 8-bit data, 2-bit tag; `gs4d_top`:
 `NUM_PE=1, Q_FRAC=8, CACHE_WAYS=2, CACHE_SETS=4, ID_W=4`) and loaded through `eda_core`
-(`parser.py` + `fast_eda`). Result of `make formal_4dgs`:
+(`parser.py` + `fast_eda`). Historical pre-conic result of `make formal_4dgs`
+(the corrected control proof is described after this table):
 
 | Target | Obligation | Expect | Result | Method | Time (s) | Verdict |
 |---|---|---|---|---|---|---|
@@ -114,6 +144,17 @@ Netlists are produced by `scripts/formal/rtl_to_netlist.py` in small formal conf
 
 **26/26 obligations as expected, 26 Z3 queries** (5.4.1, timeout 30 s, 3.89 s total). No obligation needed COI slicing or the BMC-20 fallback; BMC-20 is used deliberately for the reset-reachability check.
 
+**Corrected conic run:** `make formal_4dgs` passes end-to-end using Verilator
+4.038, sv2v 0.0.12, Yosys 0.23, Berkeley ABC and Z3 5.4.1: **36/36 obligations,
+36 queries**, approximately 5.52 s in the Z3 stage on the Devin machine;
+timing is machine-dependent. All unbounded obligations close
+monolithically; the explicit BMC-20 control-safety check also passes. No timeout,
+COI fallback or bounded downgrade was needed. Lossless cache non-interference
+takes 1.21 s, cache coherency 0.24 s, control-invariant induction 0.01 s,
+unbounded progress 0.02 s, and the 52-output-cone restoring-step check 0.19 s.
+Per-obligation times and results are written to `build/formal/formal_4dgs.json`
+and `build/formal/formal_4dgs.log` (not committed).
+
 Proof structure:
 
 * **Skip equivalence (lossless mode).** Under `motion_thresh == 0`, `skip_deform` is never 1 and
@@ -128,11 +169,37 @@ Proof structure:
   hold at reset and are inductive; under them, a lookup response coincident with a write-back
   reports exactly the post-write array (hit data or miss), and a write changes only
   `(sel_set, sel_way)` with `{sel_tag, wr_data}`.
-* **Back-pressure / deadlock freedom.** In `OUT` with `out_ready == 0`, the FSM, all output
+* **Back-pressure / deadlock freedom (corrected conic FSM).** In `OUT` with `out_ready == 0`, the FSM, all output
   registers and the whole cache (arrays, valid, round-robin) are frozen and `in_ready == 0`. The FSM
-  stays in its 5 legal states; `OUT ∧ out_ready → ACCEPT`, `ACCEPT ∧ in_valid → LOOKUP`; a ranking
-  function strictly decreases in every cycle of `LOOKUP/PROJ/RASTER`, so the only waiting states are
-  the two handshake states. BMC-20 from reset confirms the first result appears within 11 cycles.
+  stays in its 7 legal states; `OUT ∧ out_ready → ACCEPT`, `ACCEPT ∧ in_valid → LOOKUP`.
+  A reset-established, inductive control invariant constrains PROJ phases to 0..5 or
+  7..9, DIV to phase 6 and `div_count < 17`, INV to phase 6 and `div_count == 17`,
+  and RASTER to `cnt < 4`. Under it, the unsigned 8-bit rank is:
+
+  | State | Rank |
+  |---|---|
+  | LOOKUP | 32 |
+  | PROJ, phase 0..5 | 31 - phase |
+  | DIV | 25 - div_count |
+  | INV | 8 |
+  | PROJ, phase 7..9 | 14 - phase |
+  | RASTER | 4 - cnt |
+  | ACCEPT / OUT | 0 |
+
+  Every busy step has positive rank, strictly decreases it, and cannot return to
+  ACCEPT. Thus every accepted transaction reaches OUT, independently of cache and
+  arithmetic data; only the two handshake states can wait. This is an **unbounded
+  inductive progress proof**, not bounded liveness. Recompute needs 33 edges to
+  `out_valid`, exceeding 20, so BMC remains at **k=20** and checks reset-reachable
+  control safety, not an impossible 20-cycle completion bound.
+* **Divider.** Additional gate-netlist obligations check rounded-numerator
+  initialization from the latched determinant, zero initial quotient/remainder, nonpositive-det
+  degeneracy, the saturation mux, each bit of the restoring quotient/remainder/
+  numerator recurrence, and INV loading. These are compositional local-step
+  checks, not a monolithic endpoint division miter.
+* **Proof acceptance.** The 30-second per-query, three-attempt, COI-slicing and
+  BMC-20 fallback policy is unchanged. A bounded fallback is diagnostic only for
+  these unbounded obligations and fails this gate rather than counting as proof.
 
 **Breaker / bottleneck status.** The first attempt to prove `delta` against the L1 specification
 as one 4-operand adder miter exhausted the 30 s × 3 budget, fell back to per-bit COI slicing and
@@ -144,7 +211,7 @@ flatten/ABC (e.g. `cache_wr`) were exposed as free variables, producing a spurio
 counterexample; `rtl_to_netlist.py` now exposes such bits as `None`. The Phase 2 baseline flow
 (`make formal_z3`, 16/16 + breaker drill 9/9) is unchanged.
 
-## 6. DSE sweep (36 points)
+## 6. Historical pre-fix DSE sweep (36 points; covariance, not conic)
 
 Columns: `skip_rate`, `speedup` (vs the same hardware with no skipping) and `throughput`
 (shaded pixels per active cycle) come from the Verilator runs; `gates`, `ffs`, `aig_and`, `levels`
@@ -263,3 +330,117 @@ SRAM excluded and given separately as `sram_bits`); `adp = area × levels`;
 * Tier 3: the bottleneck and the CEGAR finding are described in §5. No obligation in the final
   run used slicing or BMC fallback.
 
+## 7. Corrected conic projection: targeted rerun
+
+This is **not** a new full-grid sweep. The historical table actually lists eight
+3-objective Pareto points, not nine. We rerun those eight plus the remaining Q8
+combination (`PE=4, WAYS=2`) and three Q12 controls paired with `PE=1, WAYS=1/2/4`.
+All configurations use 512 sets. The 12 rows below use `MOTION_THRESH=16`; each
+hardware configuration is also simulated at threshold 0 as a lossless check and
+to measure speedup. No other hardware configurations are synthesized.
+The default sweep remains 18 hardware configurations / 36 threshold rows.
+
+Reproduction (system Verilator 4.038, sv2v 0.0.12, Yosys 0.23, default ABC mapping;
+no `abc -fast` results are mixed in):
+
+```sh
+python3 scripts/dse/run_dse_sweep.py --out build/dse_conic_targeted --jobs 4 \
+  --verilator /usr/bin/verilator --yosys "$HOME/tools/yosys-0.23/usr/bin/yosys" \
+  --sv2v "$HOME/tools/sv2v-Linux/sv2v" --abc /usr/bin/berkeley-abc \
+  --configs pe1_q8_w1_s512 pe1_q8_w2_s512 pe1_q8_w4_s512 \
+    pe2_q8_w1_s512 pe2_q8_w2_s512 pe2_q8_w4_s512 \
+    pe4_q8_w1_s512 pe4_q8_w2_s512 pe4_q8_w4_s512 \
+    pe1_q12_w1_s512 pe1_q12_w2_s512 pe1_q12_w4_s512 --report-thresholds 16
+python3 -m unittest discover -s scripts/dse -p 'test_*.py' -v
+```
+
+`--configs` rejects unknown/empty selections and deduplicates tags in grid order;
+`--report-thresholds` filters reported rows, not the two verification simulations.
+Generated CSV/JSON, synthesis netlists and simulation objects remain under ignored
+`build/`; only the documented results are committed, as in the original sweep.
+
+### Corrected targeted results (12 rows)
+
+All 12 configurations: warning-free Verilator `-Wall`, both simulations exceed
+20,000 cycles with zero bit-true mismatches, and ABC CEC PASS. The run took
+2,230 seconds with four jobs. Gates, FFs, area, ADP and levels below are
+**generic-cell Yosys/ABC proxies**, with the same area formula as §6; SRAM is
+excluded. SRAM bits remain 50,688/101,376/202,752 at Q8 and
+62,976/125,952/251,904 at Q12 for 1/2/4 ways.
+`front` means both the 2- and 3-objective fronts **among these 12 rows only**.
+`skip alpha px/max LSB` is error versus fixed-point full recomputation.
+
+| PE | ways | F | generic gates | FFs | area | levels | ADP | throughput | eff_thr | skip_rate | speedup | skip alpha px/max LSB | front |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 1 | 8 | 23048 | 1763 | 37638 | 334 | 12571092 | 0.1267 | 0.3793 | 0.0898 | 1.0767x | 84/14 | yes |
+| 1 | 1 | 12 | 32067 | 1943 | 49821 | 408 | 20326968 | 0.1022 | 0.2505 | 0.0820 | 1.0733x | 0/0 | no |
+| 1 | 2 | 8 | 28509 | 2275 | 47034 | 335 | 15756390 | 0.1479 | 0.4415 | 0.2576 | 1.2571x | 246/14 | yes |
+| 1 | 2 | 12 | 37579 | 2455 | 59382 | 410 | 24346620 | 0.1180 | 0.2877 | 0.2312 | 1.2387x | 0/0 | no |
+| 1 | 4 | 8 | 38957 | 3813 | 68373 | 337 | 23041701 | 0.2109 | 0.6258 | 0.5568 | 1.7927x | 572/14 | yes |
+| 1 | 4 | 12 | 48522 | 3993 | 80950 | 412 | 33351400 | 0.1615 | 0.3920 | 0.4924 | 1.6960x | 0/0 | no |
+| 2 | 1 | 8 | 33084 | 1763 | 48584 | 334 | 16227056 | 0.1352 | 0.4049 | 0.0898 | 1.0819x | 84/14 | no |
+| 2 | 2 | 8 | 38453 | 2275 | 58217 | 337 | 19619129 | 0.1597 | 0.4739 | 0.2576 | 1.2777x | 246/14 | yes |
+| 2 | 4 | 8 | 48214 | 3813 | 79360 | 340 | 26982400 | 0.2358 | 0.6934 | 0.5568 | 1.8862x | 572/14 | yes |
+| 4 | 1 | 8 | 52008 | 1763 | 70282 | 337 | 23685034 | 0.1400 | 0.4154 | 0.0898 | 1.0848x | 84/14 | no |
+| 4 | 2 | 8 | 57909 | 2275 | 79654 | 334 | 26604436 | 0.1663 | 0.4981 | 0.2576 | 1.2892x | 246/14 | no |
+| 4 | 4 | 8 | 68150 | 3813 | 101121 | 334 | 33774414 | 0.2505 | 0.7501 | 0.5568 | 1.9417x | 572/14 | yes |
+
+**Pareto-change verdict:** the historical eight-point 3-objective set shrinks to
+six in this targeted cohort: Q8 `(PE,ways) = (1,1), (1,2), (1,4), (2,2), (2,4),
+(4,4)`. The historical `(2,1)` and `(4,1)` points are now dominated by `(1,2)`
+(lower ADP, higher effective throughput and skip rate). `(1,4)` was previously
+3-objective-only and is now also on the 2-objective front. The additional Q8
+`(4,2)` remains dominated, e.g. by `(1,4)`. All three Q12 controls are dominated
+by their Q8 counterparts on these cost/performance objectives; precision is not
+an objective in this front. This does **not** establish the corrected full-grid
+front: the other six Q12 hardware configurations were deliberately not rerun.
+
+The divider makes recompute much longer, so cache capacity now matters more than
+adding raster lanes: e.g. `(1,4,Q8)` beats `(4,2,Q8)` on ADP, effective throughput
+and skip rate. Compared with the old covariance-only model, the longer projection
+reduces absolute throughput but increases skip-path speedup (up to 1.9417x here).
+Corrected Q8 skipping changes at most 572/16,384 scene alpha values by at most
+14 LSB, versus the historical 451 values / 7 LSB; the three paired Q12 controls
+show zero skip-induced alpha error, not zero error versus floating point.
+
+### Q8 versus Q12 precision after covariance inversion
+
+The independent `scene.hpp::conic_from_scale` cross-check on the same 4,096 scene
+transactions gives Q8: 12,264 coefficients checked, 24 excluded for reciprocal
+saturation (eight transactions), zero out-of-range references, zero failures.
+Q12: all 12,288 coefficients checked, zero reciprocal saturations, zero out-of-range
+references, zero failures. Saturation counts are coefficients, not Gaussians;
+the fixed-point determinant/reciprocal makes low-scale Q8 cases more sensitive.
+
+For an additional full-recompute audit, compare `lane_alpha / 2^F` on all 16,384
+scene pixels against double-precision `opacity * exp(-0.5*(a*dx*dx + 2*b*dx*dy +
+c*dy*dy))`, using `conic_from_scale`, the same quantized deformed scales, rho,
+means, opacity and pixel coordinates. Include saturated cases and use no cache
+skips. This isolates arithmetic/exp approximation from input quantization and
+cache reuse; it is not an end-to-end image-quality measurement:
+
+| Q_FRAC | alpha MAE | alpha RMSE | max absolute alpha error |
+|---|---|---|---|
+| 8 | 0.00949220 | 0.01430091 | 0.05904488 |
+| 12 | 0.00860526 | 0.01307396 | 0.04375759 |
+
+Q12 improves precision and eliminates the observed reciprocal saturations, but
+does not eliminate the lane's piecewise exp approximation or its alpha cutoff.
+These errors are versus exact floating-point exp, **not** the DSE
+`max_alpha_err_lsb`/`lossy_alpha_px` fields, which compare skipping with fixed-point
+full recomputation. Equal raw threshold 16 also means different physical motion
+tolerances (16/256 versus 16/4096), so Q8/Q12 skip rates are not equal-quality budgets.
+The restoring divider costs `2F+1` cycles (17 versus 25), and total projection
+cost is `11+2F` (27 versus 35): Q12 adds eight cycles on every recompute.
+
+### Formal observation portability (Yosys 0.23 / Noble 0.33)
+
+Yosys 0.33 trims the public `remainder_q` alias to 12 bits even though five higher
+register bits remain live under `trial` aliases. The old proof zero-extended the
+shortened word, causing a spurious restoring-step SAT result. Formal extraction
+now preserves all four divider observation words **after hierarchy specialization**
+and rejects missing/trimmed words (17-bit numerator/quotient, 18-bit remainder/
+denominator). This changes only formal observability, not RTL or production
+synthesis, and leaves the recurrence assertion and solver guardrails unchanged.
+Unexpected SAT results also print control/divider values and save the complete
+model under the formal output directory for diagnosis.

@@ -23,8 +23,13 @@
 #include "Vgs4d_accelerator_top.h"
 #include "verilated.h"
 
-// Internal signals via --public-flat-rw (Verilator 4.038 flat naming).
+// Internal signals via --public-flat-rw; newer Verilator stores them in rootp.
+#if defined(VERILATOR_VERSION_INTEGER) && VERILATOR_VERSION_INTEGER >= 4020000
+#include "Vgs4d_accelerator_top___024root.h"
+#define SIG(n) top.rootp->gs4d_accelerator_top__DOT__##n
+#else
 #define SIG(n) top.gs4d_accelerator_top__DOT__##n
+#endif
 
 #ifndef NUM_PE
 #define NUM_PE 1
@@ -98,6 +103,8 @@ int main(int argc, char** argv) {
 
   std::deque<gs4d_ref::GaussIn> stim;
   std::deque<gs4d_ref::GaussOut> expect;
+  std::deque<gs4d_ref::GaussIn> inputs;
+  gs4d_ref::ConicCheck conic_check;
   uint64_t model_cycles[gs4d_ref::kFrames] = {}, noskip_cycles[gs4d_ref::kFrames] = {};
   uint64_t frame_skips[gs4d_ref::kFrames] = {};
   std::deque<int> frame_of;
@@ -108,10 +115,25 @@ int main(int argc, char** argv) {
       expect.push_back(o);
       frame_of.push_back(t);
       model_cycles[t] += o.cycles;
-      noskip_cycles[t] += 3 + cfg.raster_cycles() + 4;
+      noskip_cycles[t] += 3 + cfg.raster_cycles() + cfg.projection_cycles();
       frame_skips[t] += o.skipped;
     }
   }
+  for (auto g : gs4d_ref::conic_edges(Q_FRAC)) {
+    g.dmu_x = int64_t{1} << Q_FRAC;
+    const auto o = model.step(g, &st);
+    stim.push_back(g); expect.push_back(o); frame_of.push_back(gs4d_ref::kFrames-1);
+    model_cycles[gs4d_ref::kFrames-1] += o.cycles;
+    noskip_cycles[gs4d_ref::kFrames-1] += o.cycles;
+  }
+  auto directed = gs4d_ref::directed_conic(Q_FRAC);
+  directed.dmu_x = directed.pix_x0;  // force recompute even with nonzero threshold
+  directed.pix_x0 += directed.dmu_x;
+  const auto directed_out = model.step(directed, &st);
+  stim.push_back(directed); expect.push_back(directed_out); frame_of.push_back(gs4d_ref::kFrames-1);
+  model_cycles[gs4d_ref::kFrames-1] += directed_out.cycles;
+  noskip_cycles[gs4d_ref::kFrames-1] += directed_out.cycles;
+  inputs = stim;
   const size_t total = stim.size();
 
   Vgs4d_accelerator_top top;
@@ -130,9 +152,9 @@ int main(int argc, char** argv) {
   uint64_t frame_active[gs4d_ref::kFrames] = {};
   bool held = false, in_flight_skip = false;
   Snap held_snap{};
-  uint64_t iso_ref[4] = {};
+  uint64_t iso_ref[10] = {};
   bool inv = false;
-  const uint64_t timeout = 40ull * total + 1000;
+  const uint64_t timeout = (cfg.projection_cycles()+40ull) * total + 1000;
 
   while (outputs < total && cycles < timeout) {
     if (!inv) top.in_valid = !stim.empty() && (lcg(seed) % 10) < 3;
@@ -168,14 +190,23 @@ int main(int argc, char** argv) {
 
     if (in_flight_skip) {
       ++skip_cycles;
-      const uint64_t now[4] = {SIG(proj_a), SIG(proj_b), SIG(sx_q), SIG(sy_q)};
-      for (int i = 0; i < 4; ++i) iso_err += now[i] != iso_ref[i];
+      const uint64_t now[10] = {SIG(proj_a), SIG(proj_b), SIG(sx_q), SIG(sy_q),
+        SIG(numerator), SIG(quotient), SIG(remainder_q), SIG(denominator), SIG(inv_q), SIG(div_count)};
+      for (int i = 0; i < 10; ++i) iso_err += now[i] != iso_ref[i];
       iso_err += SIG(cache_wr);
     }
 
     if (fire) {
       const auto& e = expect.front();
       const Snap s = snap(top);
+      if (!s.skipped) {
+        gs4d_ref::Attr attr{sext(s.mx), sext(s.my), sext(s.ca), sext(s.cb), sext(s.cc), sext(s.op)};
+        conic_check.check(gs4d_ref::Fx(Q_FRAC), inputs.front(), attr);
+      }
+      if (outputs == total-1 && Q_FRAC == 8) {
+        std::printf("directed RTL conic alpha=%lld expected=233 (not 35)\n", (long long)s.alpha[0]);
+        if (s.alpha[0] != 233 || s.alpha[0] == 35 || s.skipped) ++mismatches;
+      }
       const bool ok = s.id == e.id && s.skipped == (e.skipped ? 1u : 0u) && s.delta == e.delta &&
                       sext(s.mx) == e.attr.mean_x && sext(s.my) == e.attr.mean_y &&
                       sext(s.ca) == e.attr.cov_a && sext(s.cb) == e.attr.cov_b &&
@@ -193,6 +224,7 @@ int main(int argc, char** argv) {
       }
       skipped_rtl += s.skipped;
       expect.pop_front();
+      inputs.pop_front();
       frame_of.pop_front();
       ++outputs;
     }
@@ -210,6 +242,8 @@ int main(int argc, char** argv) {
     if (SIG(state) == 3 && SIG(out_skipped) && !in_flight_skip) {
       in_flight_skip = true;
       iso_ref[0] = SIG(proj_a); iso_ref[1] = SIG(proj_b); iso_ref[2] = SIG(sx_q); iso_ref[3] = SIG(sy_q);
+      iso_ref[4] = SIG(numerator); iso_ref[5] = SIG(quotient); iso_ref[6] = SIG(remainder_q);
+      iso_ref[7] = SIG(denominator); iso_ref[8] = SIG(inv_q); iso_ref[9] = SIG(div_count);
     }
     if (SIG(state) == 0) in_flight_skip = false;
   }
@@ -230,7 +264,8 @@ int main(int argc, char** argv) {
   }
   const bool cycles_ok = active == model_total;
   const bool lossless_ok = thresh != 0 || skipped_rtl == 0;
-  const bool pass = mismatches == 0 && stability_err == 0 && iso_err == 0 && cycles_ok &&
+  conic_check.report(Q_FRAC);
+  const bool pass = conic_check.failures == 0 && mismatches == 0 && stability_err == 0 && iso_err == 0 && cycles_ok &&
                     lossless_ok && cycles >= kMinCycles && skipped_rtl == st.skipped;
   const double skip_rate = double(skipped_rtl) / double(total);
   const double speedup = double(noskip_total) / double(model_total);

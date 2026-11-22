@@ -40,6 +40,7 @@ G4_TARGETS = {
                        sources=(f"{G4}/SRAM_gs4d_cache.sv", f"{G4}/motion_aware_cache.sv"), sv2v=True,
                        params=dict(CACHE_SETS=4, CACHE_WAYS=2, DATA_WIDTH=8, TAG_WIDTH=2)),
     "gs4d_top": dict(top="gs4d_accelerator_top", sources=G4_ALL, sv2v=True, incdir=G4,
+                     observe=dict(numerator=17, quotient=17, remainder_q=18, denominator=18),
                      params=dict(NUM_PE=1, Q_FRAC=8, CACHE_WAYS=2, CACHE_SETS=4, ID_W=4)),
 }
 BASELINE_TARGETS = tuple(TARGETS)
@@ -165,6 +166,13 @@ def emit(module, top):
     return "\n".join(text), dict(top=top, ports=ports, registers=regs, cuts=cuts, aliases=aliases)
 
 
+def validate_observations(module, widths):
+    for name, width in widths.items():
+        actual = len(module["netnames"].get(name, {}).get("bits", []))
+        if actual != width:
+            raise ValueError(f"formal observation {name}: expected {width} bits, got {actual}")
+
+
 def build(target, out, yosys, sv2v, abc, sources=None):
     """Netlist `target`; `sources` overrides its RTL files (e.g. a fault-injected copy)."""
     spec = TARGETS[target]
@@ -179,9 +187,13 @@ def build(target, out, yosys, sv2v, abc, sources=None):
     reads += [f"read_verilog {'' if spec['sv2v'] else '-sv '}{s}" for s in sources]
     script = out / f"{target}.ys"
     reads += [f"chparam -set {k} {v} {spec['top']}" for k, v in spec.get("params", {}).items()]
+    if spec.get("observe"):
+        # Preserve observations after hierarchy specializes parameterized modules.
+        reads += [f"hierarchy -top {spec['top']}", f"rename -top {spec['top']}"]
+        reads += ["setattr -set keep 1 " + " ".join(f"w:{name}" for name in spec["observe"])]
     script.write_text("\n".join(reads + [
         f"synth -top {spec['top']} -flatten -noabc -nofsm",
-        *([f"rename -top {spec['top']}"] if "params" in spec else []),
+        *([f"rename -top {spec['top']}"] if "params" in spec and not spec.get("observe") else []),
         "setundef -zero", "dffunmap",
         f"abc -exe {abc} -g AND,NAND,OR,NOR,XOR,XNOR",
         "opt_clean", "check -assert", "stat",
@@ -190,7 +202,9 @@ def build(target, out, yosys, sv2v, abc, sources=None):
     ]) + "\n", encoding="utf-8")
     run([yosys, "-QT", "-s", str(script)], out / "yosys.log")
     design = json.loads((out / f"{target}.yosys.json").read_text(encoding="utf-8"))
-    verilog, manifest = emit(design["modules"][spec["top"]], spec["top"])
+    module = design["modules"][spec["top"]]
+    validate_observations(module, spec.get("observe", {}))
+    verilog, manifest = emit(module, spec["top"])
     (out / f"{target}.v").write_text(verilog, encoding="utf-8")
     (out / f"{target}.json").write_text(json.dumps(manifest, indent=1) + "\n", encoding="utf-8")
     return out / f"{target}.v", out / f"{target}.json"
