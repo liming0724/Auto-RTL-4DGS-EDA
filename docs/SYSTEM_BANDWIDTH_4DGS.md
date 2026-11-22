@@ -128,6 +128,23 @@ no hits on this scene.
   skip-decision fields separately from the full record. Phase 5b (ping-pong buffer +
   AXI4-Stream wrapper) is where that split would be designed.
 
+## Verification (three-tier funnel)
+
+| Tier | Check | Result |
+|---|---|---|
+| 1 Verilator | `verilator --lint-only -Wall` on `gs4d_accelerator_top` (Q8 default; Q12 with `CACHE_WAYS=4`) | 0 warnings |
+| 1 Verilator | `make eval_quality_4dgs` fine sweep | 18 points, 0 mismatches; the 12 Phase 4 points are identical |
+| 1 Verilator | `make profile_bw_4dgs` | 6 runs, 0 mismatches vs golden model |
+| 1 Verilator | `make sim_4dgs` (default config, `cache_bypass=0`) | PASS, same numbers as Phase 4 |
+| 2 Yosys + ABC | `synth_4dgs`, default config `NUM_PE=1, Q_FRAC=8, CACHE_WAYS=2, CACHE_SETS=512` | **50,910 generic gates** (Phase 4: 51,110; Δ −200, −0.39%), 2,275 FFs, 61,125 AIG ANDs, 336 AIG levels (Phase 4: 334); **CEC PASS** |
+| 3 Z3 | `make formal_4dgs` (30 s timeout, COI slicing, BMC-20) | **45/45 as expected** (43 Phase 4 + 2 bypass obligations) |
+
+Gate counts are Yosys 0.23 + Berkeley ABC generic-cell numbers. They are not 130 nm
+standard-cell figures. The Phase 4 reference (51,110) was re-synthesized from e49676f in
+the same environment and reproduced exactly. The bypass adds one AND term to the hit
+path. The 200-gate decrease is ABC restructuring that logic, not a removed function, and
+CEC confirms the optimized netlist matches the RTL.
+
 ## Hygiene
 
 - The profiler reuses the frame testbench and golden model. It changes no rendering math
