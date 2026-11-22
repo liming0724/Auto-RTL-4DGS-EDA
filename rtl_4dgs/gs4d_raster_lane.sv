@@ -6,6 +6,7 @@
 //   alpha = 0 if e < 0, else opacity * 2^-(e*log2e) with 2^-y ~ (1 - frac(y)/2) >> int(y),
 //           flushed to 0 below 2^-8.
 // Every multiply is fxmul: (a*b + 2^(F-1)) >>> F, saturated to W bits.
+// Historical cov_a/b/c input names carry inverse covariance (conic a/b/c).
 module gs4d_raster_lane #(
     parameter int Q_FRAC = 8,
     parameter int W = 8 + Q_FRAC

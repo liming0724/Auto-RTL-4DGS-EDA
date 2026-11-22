@@ -18,20 +18,27 @@ struct SceneConfig {
   int sram_depth = 1089;
 };
 
+struct Conic { double a, b, c; };
+
+inline Conic conic_from_scale(double sx, double sy, double rho) {
+  const double det = sx * sx * sy * sy * (1 - rho * rho);
+  return {sy * sy / det, -rho * sx * sy / det, sx * sx / det};
+}
+
 inline std::vector<Gaussian4D> make_scene(const SceneConfig& sc, const TileConfig& tc = TileConfig{}) {
   std::mt19937 rng(sc.seed);
   auto U = [&](double a, double b) { return std::uniform_real_distribution<double>(a, b)(rng); };
   std::vector<Gaussian4D> gs(sc.num_gaussians);
   for (auto& g : gs) {
     const double sx = U(1.0, 8.0), sy = U(1.0, 8.0), rho = U(-0.6, 0.6);
-    const double det = sx * sx * sy * sy * (1 - rho * rho);
+    const auto conic = conic_from_scale(sx, sy, rho);
     g.s.ux = tc.px_offset + U(-6, tc.width + 6);
     g.s.uy = tc.py_offset + U(-6, tc.height + 6);
     g.s.red = U(0, 1); g.s.green = U(0, 1); g.s.blue = U(0, 1);
     g.s.depth = U(1, 20);
-    g.s.conx = sy * sy / det;                 // conic a
-    g.s.cony = -rho * sx * sy / det;          // conic b (RTL: beta = -0.5(a dx^2 + c dy^2) - b dx dy)
-    g.s.conz = sx * sx / det;                 // conic c
+    g.s.conx = conic.a;
+    g.s.cony = conic.b;
+    g.s.conz = conic.c;
     g.s.conw = U(0.2, 0.99);
     g.s.coni = U(-0.05, 0.05); g.s.conj = U(-0.05, 0.05);
     g.t0 = U(0, 1);

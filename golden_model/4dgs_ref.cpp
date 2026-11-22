@@ -86,6 +86,27 @@ int main(int argc, char** argv) {
   }
   const std::vector<SceneGauss> scene = make_scene();
   int fails = 0;
+  for (int f : {8, 12}) {
+    Fx fx(f);
+    ConicCheck check;
+    for (int t = 0; t < kFrames; ++t)
+      for (const auto& g : make_frame(scene, t, f)) check.check(fx, g, project(fx, g));
+    check.report(f);
+    fails += check.failures != 0;
+  }
+  const auto directed = directed_conic(8);
+  for (int f : {8, 12}) {
+    const auto edges = conic_edges(f);
+    const auto zero = project(Fx(f), edges[0]);
+    const auto singular = project(Fx(f), edges[1]);
+    const auto tiny = project(Fx(f), edges[2]);
+    const int64_t max = (int64_t{1} << (7+f))-1;
+    if (zero.cov_a || zero.cov_b || zero.cov_c || tiny.cov_a || tiny.cov_b || tiny.cov_c ||
+        singular.cov_a != max || singular.cov_c != max || singular.cov_b != -max) ++fails;
+  }
+  const auto alpha = lane_alpha(Fx(8), directed.pix_x0, directed.pix_y, project(Fx(8), directed));
+  if (alpha != 233 || alpha == 35) ++fails;
+  std::printf("directed conic Q_FRAC=8 alpha=%lld expected=233 (not 35)\n", (long long)alpha);
   if (sweep) {
     std::printf("num_pe,cache_ways,q_frac,motion_thresh,gaussians,skipped,skip_rate,cycles,"
                 "cycles_noskip,speedup,mults,mults_noskip,alpha_err_px,max_alpha_err\n");
@@ -114,6 +135,6 @@ int main(int argc, char** argv) {
                 100.0 * (1.0 - double(s.mults) / double(s.mults_noskip)),
                 100.0 * (1.0 - double(s.adds) / double(s.adds_noskip)));
   }
-  if (fails) { std::fprintf(stderr, "FAIL: lossless mode (MOTION_THRESH=0) skipped Gaussians\n"); return 1; }
+  if (fails) { std::fprintf(stderr, "FAIL: golden self-check\n"); return 1; }
   return 0;
 }
