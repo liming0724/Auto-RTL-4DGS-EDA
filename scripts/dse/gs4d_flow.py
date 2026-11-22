@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT / "scripts/synth"))
 from baseline import cut_blif, run  # noqa: E402  pylint: disable=wrong-import-position
 
 RTL = ROOT / "rtl_4dgs"
-RTL_FILES = [RTL / f"{m}.sv" for m in ("gs4d_accelerator_top", "temporal_skip_unit", "motion_aware_cache",
+RTL_FILES = [RTL / f"{m}.sv" for m in ("gs4d_accelerator_top", "deform_engine", "temporal_skip_unit", "motion_aware_cache",
                                        "SRAM_gs4d_cache", "gs4d_raster_lane")]
 SIM_MAIN = RTL / "sim/sim_main_4dgs.cpp"
 TOP = "gs4d_accelerator_top"

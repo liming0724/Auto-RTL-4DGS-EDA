@@ -1,9 +1,14 @@
-// 4DGS accelerator top: temporal deformation + motion-aware skip + temporal attribute
-// cache + NUM_PE-lane fixed-point rasterizer (Q(7,Q_FRAC), W = 8 + Q_FRAC bits).
+// 4DGS accelerator top: swappable deformation front-end (deform_engine) + motion-aware
+// skip + temporal attribute cache + NUM_PE-lane fixed-point rasterizer (Q(7,Q_FRAC),
+// W = 8 + Q_FRAC bits).
 //
 // One Gaussian per transaction (in_valid/in_ready), one result per transaction
 // (out_valid/out_ready, held stable under backpressure). FSM:
-//   ACCEPT : capture inputs, temporal_skip_unit decides skip_deform, issue cache lookup
+//   ACCEPT : deform_engine evaluates dmu(t), ds(t), drho(t) from in_t and the basis
+//            coefficients (in_dmu_*/in_ds_* are its order-0 terms, so in_coef == 0 is the
+//            Phase 3 precomputed-delta interface); temporal_skip_unit decides skip_deform
+//            on the generated deltas; capture inputs, rho(t) = rho + drho; cache lookup.
+//            The engine runs for every Gaussian (never gated by its own skip decision).
 //   LOOKUP : cache response. skip_deform && hit -> reuse cached 2D attributes -> RASTER.
 //            Otherwise deform mu(t) = mu0 + dmu, s(t) = s0 + ds -> PROJ.
 //   PROJ   : six covariance/determinant products on one shared fxmul, det subtract,
@@ -24,7 +29,8 @@ module gs4d_accelerator_top #(
     parameter int CACHE_SETS = 512,
     parameter int ID_W       = 12,
     parameter int TILE       = 4,
-    parameter int W          = 8 + Q_FRAC
+    parameter int W          = 8 + Q_FRAC,
+    parameter int COEF_W     = 10 * W
 ) (
     input  logic              clk,
     input  logic              rst_n,
@@ -44,6 +50,8 @@ module gs4d_accelerator_top #(
     input  logic [W-1:0]      in_opacity,
     input  logic [W-1:0]      in_pix_x0,
     input  logic [W-1:0]      in_pix_y,
+    input  logic [W-1:0]      in_t,
+    input  logic [COEF_W-1:0] in_coef,
     output logic              out_valid,
     input  logic              out_ready,
     output logic [ID_W-1:0]   out_id,
@@ -106,11 +114,32 @@ module gs4d_accelerator_top #(
     assign out_valid = state == S_OUT;
     assign accept    = in_valid && in_ready;
 
+    // Deformation front-end: all basis-specific math lives in deform_engine.sv.
+    logic [W-1:0] def_dmu_x, def_dmu_y, def_ds_x, def_ds_y, def_dr;
+    deform_engine #(.Q_FRAC(Q_FRAC), .W(W), .COEF_W(COEF_W)) u_deform (
+        .mu0_x(in_mu0_x),
+        .mu0_y(in_mu0_y),
+        .s0_x(in_s0_x),
+        .s0_y(in_s0_y),
+        .rho0(in_rho),
+        .t(in_t),
+        .c0_mu_x(in_dmu_x),
+        .c0_mu_y(in_dmu_y),
+        .c0_s_x(in_ds_x),
+        .c0_s_y(in_ds_y),
+        .coef(in_coef),
+        .dmu_x(def_dmu_x),
+        .dmu_y(def_dmu_y),
+        .ds_x(def_ds_x),
+        .ds_y(def_ds_y),
+        .dr(def_dr)
+    );
+
     temporal_skip_unit #(.W(W)) u_skip (
-        .dmu_x(in_dmu_x),
-        .dmu_y(in_dmu_y),
-        .ds_x(in_ds_x),
-        .ds_y(in_ds_y),
+        .dmu_x(def_dmu_x),
+        .dmu_y(def_dmu_y),
+        .ds_x(def_ds_x),
+        .ds_y(def_ds_y),
         .motion_thresh(motion_thresh),
         .delta(skip_delta),
         .skip_deform(skip_deform)
@@ -186,10 +215,11 @@ module gs4d_accelerator_top #(
                     skip_q   <= skip_deform;
                     out_delta <= skip_delta;
                     mu0x_q   <= in_mu0_x;  mu0y_q <= in_mu0_y;
-                    dmux_q   <= in_dmu_x;  dmuy_q <= in_dmu_y;
+                    dmux_q   <= def_dmu_x; dmuy_q <= def_dmu_y;
                     s0x_q    <= in_s0_x;   s0y_q  <= in_s0_y;
-                    dsx_q    <= in_ds_x;   dsy_q  <= in_ds_y;
-                    rho_q    <= in_rho;    opa_q  <= in_opacity;
+                    dsx_q    <= def_ds_x;  dsy_q  <= def_ds_y;
+                    rho_q    <= fx_add(in_rho, def_dr);
+                    opa_q    <= in_opacity;
                     pix_x0_q <= in_pix_x0; pix_y_q <= in_pix_y;
                     state    <= S_LOOKUP;
                 end

@@ -31,7 +31,7 @@ TARGETS = {
 # Phase 3 (rtl_4dgs): small formal configurations (4 cache sets, 4-bit ids); the cache
 # SRAM model is netlisted (not cut) so cache contents are visible to the properties.
 G4 = "rtl_4dgs"
-G4_ALL = tuple(f"{G4}/{m}.sv" for m in ("temporal_skip_unit", "SRAM_gs4d_cache", "motion_aware_cache",
+G4_ALL = tuple(f"{G4}/{m}.sv" for m in ("deform_engine", "temporal_skip_unit", "SRAM_gs4d_cache", "motion_aware_cache",
                                         "gs4d_raster_lane", "gs4d_accelerator_top"))
 G4_TARGETS = {
     "gs4d_skip_unit": dict(top="temporal_skip_unit", sources=(f"{G4}/temporal_skip_unit.sv",),
@@ -39,6 +39,8 @@ G4_TARGETS = {
     "gs4d_cache": dict(top="motion_aware_cache",
                        sources=(f"{G4}/SRAM_gs4d_cache.sv", f"{G4}/motion_aware_cache.sv"), sv2v=True,
                        params=dict(CACHE_SETS=4, CACHE_WAYS=2, DATA_WIDTH=8, TAG_WIDTH=2)),
+    "gs4d_deform": dict(top="deform_engine", sources=(f"{G4}/deform_engine.sv",), sv2v=True, incdir=G4,
+                        params=dict(Q_FRAC=4)),
     "gs4d_top": dict(top="gs4d_accelerator_top", sources=G4_ALL, sv2v=True, incdir=G4,
                      observe=dict(numerator=17, quotient=17, remainder_q=18, denominator=18),
                      params=dict(NUM_PE=1, Q_FRAC=8, CACHE_WAYS=2, CACHE_SETS=4, ID_W=4)),
