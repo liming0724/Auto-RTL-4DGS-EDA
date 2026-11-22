@@ -23,8 +23,13 @@
 #include "Vgs4d_accelerator_top.h"
 #include "verilated.h"
 
-// Internal signals via --public-flat-rw (Verilator 4.038 flat naming).
+// Internal signals via --public-flat-rw; newer Verilator stores them in rootp.
+#if defined(VERILATOR_VERSION_INTEGER) && VERILATOR_VERSION_INTEGER >= 4020000
+#include "Vgs4d_accelerator_top___024root.h"
+#define SIG(n) top.rootp->gs4d_accelerator_top__DOT__##n
+#else
 #define SIG(n) top.gs4d_accelerator_top__DOT__##n
+#endif
 
 #ifndef NUM_PE
 #define NUM_PE 1
