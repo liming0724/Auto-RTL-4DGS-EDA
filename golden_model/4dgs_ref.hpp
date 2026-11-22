@@ -277,8 +277,9 @@ class Accelerator {
       st->deform_mults += 11;
       // Projection: 9 mults, 4 deform adds + det subtract + conic negation.
       const uint64_t rm = 8 * kTile, ra = 4 * kTile;
-      st->mults += rm + (o.skipped ? 0 : 9);
-      st->mults_noskip += rm + 9;
+      // deform_engine products run for every Gaussian, skipped or not.
+      st->mults += 11 + rm + (o.skipped ? 0 : 9);
+      st->mults_noskip += 11 + rm + 9;
       st->adds += ra + (o.skipped ? 0 : 6);
       st->adds_noskip += ra + 6;
       const Attr full = project(fx_, g);
