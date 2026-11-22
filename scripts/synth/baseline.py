@@ -92,7 +92,7 @@ def cut_blif(source, destination, top, mapped):
             continue
         if kind.startswith(("$_DFF", "$_SDFF", "$_ALDFF")):
             stats["flip_flops"] += 1
-        elif kind.startswith(("DW_fp_", "SRAM_")) or re.search(r"\\DW_fp_\w+$", kind):
+        elif kind.startswith(("DW_fp_", "SRAM_")) or re.search(r"\\(DW_fp_|SRAM_)\w+", kind):
             stats["opaque_macros"] += 1
         else:
             raise ValueError(f"unsupported cell in {top}: {name} ({kind})")

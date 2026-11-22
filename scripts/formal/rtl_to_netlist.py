@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Flatten an rtl_baseline sub-module with Yosys into netlists eda_core can ingest.
+"""Flatten an rtl_baseline / rtl_4dgs module with Yosys into netlists eda_core can ingest.
 
 Outputs (in --out, default build/formal/netlist/<target>/):
   <target>.v     primitive-gate Verilog (and/or/nand/nor/xor/xnor/not/buf + dff),
@@ -28,6 +28,22 @@ TARGETS = {
                           sources=(f"{GS}/GS_RASTERIZER_pipeline.v",), sv2v=False,
                           libs=LIBS + ("scripts/synth/gs_sram_interfaces.v",)),
 }
+# Phase 3 (rtl_4dgs): small formal configurations (4 cache sets, 4-bit ids); the cache
+# SRAM model is netlisted (not cut) so cache contents are visible to the properties.
+G4 = "rtl_4dgs"
+G4_ALL = tuple(f"{G4}/{m}.sv" for m in ("temporal_skip_unit", "SRAM_gs4d_cache", "motion_aware_cache",
+                                        "gs4d_raster_lane", "gs4d_accelerator_top"))
+G4_TARGETS = {
+    "gs4d_skip_unit": dict(top="temporal_skip_unit", sources=(f"{G4}/temporal_skip_unit.sv",),
+                           sv2v=True, params=dict(W=16)),
+    "gs4d_cache": dict(top="motion_aware_cache",
+                       sources=(f"{G4}/SRAM_gs4d_cache.sv", f"{G4}/motion_aware_cache.sv"), sv2v=True,
+                       params=dict(CACHE_SETS=4, CACHE_WAYS=2, DATA_WIDTH=8, TAG_WIDTH=2)),
+    "gs4d_top": dict(top="gs4d_accelerator_top", sources=G4_ALL, sv2v=True, incdir=G4,
+                     params=dict(NUM_PE=1, Q_FRAC=8, CACHE_WAYS=2, CACHE_SETS=4, ID_W=4)),
+}
+BASELINE_TARGETS = tuple(TARGETS)
+TARGETS.update(G4_TARGETS)
 PRIMS = {"$_AND_": "and", "$_NAND_": "nand", "$_OR_": "or", "$_NOR_": "nor",
          "$_XOR_": "xor", "$_XNOR_": "xnor", "$_NOT_": "not", "$_BUF_": "buf"}
 DFF = re.compile(r"^\$_DFF_([PN])(?:([PN])([01]))?_$")
@@ -134,10 +150,18 @@ def emit(module, top):
     text = [f"module {ident(top)} ({', '.join(inputs + outputs)});"]
     text += [f"  input {n};" for n in inputs] + [f"  output {n};" for n in outputs]
     text += [f"  wire {n};" for n in wires] + body + ["endmodule", ""]
+    # A public netname whose bit no longer has a driver after flatten/ABC (e.g. logic folded
+    # into the consumers) would read as a free variable; expose it as None instead.
+    driven = {b for p in module["ports"].values() if p["direction"] == "input" for b in p["bits"]}
+    for cell in module["cells"].values():
+        for pin, bits in cell["connections"].items():
+            if cell.get("port_directions", {}).get(pin) == "output" or pin in ("Y", "Q"):
+                driven.update(bits)
     aliases = {}
     for nname, info in module["netnames"].items():
         if not info.get("hide_name"):
-            aliases[ident(nname)] = [b if b in ("0", "1") else names.get(b) for b in info["bits"]]
+            aliases[ident(nname)] = [b if b in ("0", "1") else names.get(b) if b in driven else None
+                                     for b in info["bits"]]
     return "\n".join(text), dict(top=top, ports=ports, registers=regs, cuts=cuts, aliases=aliases)
 
 
@@ -148,13 +172,16 @@ def build(target, out, yosys, sv2v, abc, sources=None):
     sources = [str(ROOT / s) for s in (sources or spec["sources"])]
     if spec["sv2v"]:
         converted = out / f"{target}.sv2v.v"
-        run([sv2v, "-w", str(converted), *sources], out / "sv2v.log")
+        incdir = [f"-I{ROOT / spec['incdir']}"] if "incdir" in spec else []
+        run([sv2v, *incdir, "-w", str(converted), *sources], out / "sv2v.log")
         sources = [str(converted)]
     reads = [f"read_verilog -lib -sv {ROOT / lib}" for lib in spec.get("libs", LIBS)]
     reads += [f"read_verilog {'' if spec['sv2v'] else '-sv '}{s}" for s in sources]
     script = out / f"{target}.ys"
+    reads += [f"chparam -set {k} {v} {spec['top']}" for k, v in spec.get("params", {}).items()]
     script.write_text("\n".join(reads + [
         f"synth -top {spec['top']} -flatten -noabc -nofsm",
+        *([f"rename -top {spec['top']}"] if "params" in spec else []),
         "setundef -zero", "dffunmap",
         f"abc -exe {abc} -g AND,NAND,OR,NOR,XOR,XNOR",
         "opt_clean", "check -assert", "stat",
@@ -193,7 +220,7 @@ def main():
     ap.add_argument("--abc", default="yosys-abc")
     ap.add_argument("--check", action="store_true", help="load each netlist with eda_core")
     args = ap.parse_args()
-    for target in args.targets or TARGETS:
+    for target in args.targets or BASELINE_TARGETS:
         if target not in TARGETS:
             raise ValueError(f"unknown target {target}")
         netlist, _ = build(target, args.out / target, args.yosys, args.sv2v, args.abc)
