@@ -17,6 +17,7 @@
 #include <cstring>
 #include <deque>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "gs4d_frame.hpp"
@@ -37,17 +38,21 @@ int64_t sext(uint64_t v) {
   v &= kMask;
   return (v >> (W - 1)) ? static_cast<int64_t>(v) - (int64_t{1} << W) : static_cast<int64_t>(v);
 }
+// Scalar ports up to 64 bits; wider ports are uint32_t[N] (Verilator 4) or VlWide (5).
 template <class T>
-uint64_t bits(const T& word, int lsb) { return (static_cast<uint64_t>(word) >> lsb) & kMask; }
-template <std::size_t N>
-uint64_t bits(const uint32_t (&words)[N], int lsb) {
-  uint64_t v = 0;
-  for (int b = 0; b < W; ++b) v |= static_cast<uint64_t>((words[(lsb + b) / 32] >> ((lsb + b) % 32)) & 1u) << b;
-  return v;
+uint64_t bits(const T& word, int lsb) {
+  if constexpr (std::is_integral_v<T>) {
+    return (static_cast<uint64_t>(word) >> lsb) & kMask;
+  } else {
+    uint64_t v = 0;
+    for (int b = 0; b < W; ++b) v |= static_cast<uint64_t>((word[(lsb + b) / 32] >> ((lsb + b) % 32)) & 1u) << b;
+    return v;
+  }
 }
-template <std::size_t N>
-void set_coef(uint32_t (&words)[N], const gs4d_ref::GaussIn& g) {
-  for (auto& w : words) w = 0;
+template <class T>
+void set_coef(T& words, const gs4d_ref::GaussIn& g) {  // in_coef: uint32_t[N] (Verilator 4) or VlWide (5)
+  constexpr int kWords = (10 * W + 31) / 32;
+  for (int i = 0; i < kWords; ++i) words[i] = 0;
   for (int i = 0; i < 10; ++i)
     for (int b = 0; b < W; ++b)
       words[(i * W + b) / 32] |= static_cast<uint32_t>((g.coef[i] >> b) & 1) << ((i * W + b) % 32);

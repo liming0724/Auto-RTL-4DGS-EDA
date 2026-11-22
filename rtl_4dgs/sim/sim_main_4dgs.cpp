@@ -73,13 +73,9 @@ uint64_t bits(const uint32_t (&words)[N], int lsb) {  // wide out_alpha
 }
 
 template <class T>
-void set_coef(T& port, const gs4d_ref::GaussIn& g) {  // scalar in_coef (unused: 10*W > 64)
-  port = 0;
-  for (int i = 0; i < 10; ++i) port |= static_cast<T>(g.coef[i] & kMask) << (i * W);
-}
-template <std::size_t N>
-void set_coef(uint32_t (&words)[N], const gs4d_ref::GaussIn& g) {
-  for (auto& w : words) w = 0;
+void set_coef(T& words, const gs4d_ref::GaussIn& g) {  // in_coef: uint32_t[N] (Verilator 4) or VlWide (5)
+  constexpr int kWords = (10 * W + 31) / 32;
+  for (int i = 0; i < kWords; ++i) words[i] = 0;
   for (int i = 0; i < 10; ++i)
     for (int b = 0; b < W; ++b)
       words[(i * W + b) / 32] |= static_cast<uint32_t>((g.coef[i] >> b) & 1) << ((i * W + b) % 32);
