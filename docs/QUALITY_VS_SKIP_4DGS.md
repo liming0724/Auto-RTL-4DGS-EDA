@@ -108,6 +108,9 @@ and `C2 = 9e-4`. It produces one packed FP16 RGB score per pixel. It cannot take
 
 - Each frame is tiled into 4×4 tiles of 16 columns × 17 rows, at row offsets
   0/17/34/47. The last tile row overlaps rows 47–50.
+- Rows 47–50 are covered twice, by the tiles at row offsets 34 and 47, so the frame
+  score double-weights those rows. HW and SW use the same tiling, so their comparison
+  is still valid.
 - Each tile is loaded into the IP's input SRAMs through `ssim_sim_top` and scored
   cycle-accurately with the existing protocol: 400 cycles per tile, scores from tick
   38, and `out_valid` timing checked.
@@ -174,10 +177,16 @@ Observations:
 - **Q_FRAC=12, MOTION_THRESH=64 is the best Q12 point in the sweep.** It runs at 3.61×
   with no measurable loss (47.74 dB). The Q12 knee lies above T=64. T≈256 matches
   Q8 T=16 in pixel units and is the next value to sweep.
-- **Across both Q_FRAC values:** Q12 T=64 dominates every Q8 point at T≤16 on both
-  speed and PSNR (3.61× vs ≤3.55×, with about +3 dB). Only Q8 T=32 (3.70×) and Q8 T=64
-  (3.80×) are faster, and they cost 3.1 and 3.3 dB. Q8 stays the choice when area
-  matters (see §4).
+- **Across both Q_FRAC values:** compare absolute cycles, not speedups. Each speedup is
+  relative to its own precision's unskipped baseline (Q8: 5,044,240 cycles; Q12:
+  6,231,120 cycles), so speedups cannot be compared across Q_FRAC.
+  - **Speed:** Q12 T=64 takes 1,725,780 cycles vs 1,421,488 for Q8 T=16, so it is 21%
+    slower. Every Q8 point with T ≥ 4 is faster in absolute cycles (≤ 1,547,227).
+  - **PSNR:** Q12 T=64 beats Q8 T≤16 on PSNR only (47.74 dB, about +3 dB over Q8 T=16).
+    The two fastest Q8 points, T=32 (1,362,358 cycles) and T=64 (1,329,121 cycles),
+    trail it by 3.1 and 3.3 dB.
+  - **Pick:** Q12 T=64 when quality matters most, Q8 T=16 when cycles or area matter
+    (see §4).
 
 ## 4. Tier 2: Yosys/ABC generic-cell synthesis
 
