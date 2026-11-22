@@ -8,7 +8,7 @@
 // Reports skip rate, cycles vs. the unskipped cycle count, PSNR vs. FP32, and the
 // FP32-vs-fixed validation (per-pixel alpha and frame deviation, directed conic case).
 // Writes FP16 RGB frames (gt_f<k>.hex, rtl_f<k>.hex) for the SSIM_v2 testbench.
-// Usage: Vgs4d_accelerator_top +thresh=<N> +out=<dir>
+// Usage: Vgs4d_accelerator_top +thresh=<N> +out=<dir> [+cache_bypass]
 #include <algorithm>
 #include <cinttypes>
 #include <cmath>
@@ -27,10 +27,15 @@
 #ifndef Q_FRAC
 #define Q_FRAC 8
 #endif
+#ifndef CACHE_WAYS
+#define CACHE_WAYS 2
+#endif
 
 namespace {
 
 constexpr int W = 8 + Q_FRAC;
+// Packed in_* payload: 12-bit ID, 13 W-bit fields and 10 W-bit coefficients.
+constexpr unsigned BYTES_PER_GAUSSIAN = (12 + 23 * W + 7) / 8;
 constexpr uint64_t kMask = (uint64_t{1} << W) - 1;
 using gs4d_frame::Frame;
 
@@ -72,15 +77,19 @@ struct Job { gs4d_ref::GaussIn in; gs4d_ref::GaussOut out; int gauss, frame; };
 int main(int argc, char** argv) {
   Verilated::commandArgs(argc, argv);
   uint32_t thresh = 0;
+  bool cache_bypass = false;
   std::string dir = ".";
   for (int i = 1; i < argc; ++i) {
     if (!std::strncmp(argv[i], "+thresh=", 8)) thresh = static_cast<uint32_t>(std::atoi(argv[i] + 8));
     if (!std::strncmp(argv[i], "+out=", 5)) dir = argv[i] + 5;
+    if (!std::strcmp(argv[i], "+cache_bypass")) cache_bypass = true;
   }
   using namespace gs4d_frame;
   const auto scene = make_scene();
-  gs4d_ref::Config cfg{1, Q_FRAC, 2, 512, thresh};
-  gs4d_ref::Accelerator model(cfg);
+  gs4d_ref::Config cfg{1, Q_FRAC, CACHE_WAYS, 512, thresh};
+  auto reference_cfg = cfg;
+  if (cache_bypass) reference_cfg.motion_thresh = 0;  // Existing full-recompute oracle.
+  gs4d_ref::Accelerator model(reference_cfg);
   gs4d_ref::Stats st;
   const double unit = std::ldexp(1.0, -Q_FRAC);
   int fails = 0;
@@ -114,17 +123,17 @@ int main(int argc, char** argv) {
   }
 
   std::vector<Job> jobs;
-  std::vector<uint64_t> frame_tx(kFrameCount), frame_skip(kFrameCount);
+  std::vector<uint64_t> frame_tx(kFrameCount), frame_skip(kFrameCount), fetch_count(kFrameCount);
   for (int fr = 0; fr < kFrameCount; ++fr)
     for (const Span& sp : bin_spans(scene, fr)) {
       Job j{quantize(scene[sp.gauss], sp, fr, Q_FRAC), {}, sp.gauss, fr};
       j.out = model.step(j.in, &st);
       ++frame_tx[fr];
-      frame_skip[fr] += j.out.skipped;
       jobs.push_back(j);
     }
 
   Vgs4d_accelerator_top top;
+  top.cache_bypass = cache_bypass;
   top.motion_thresh = thresh;
   top.out_ready = 1;
   top.in_valid = 0;
@@ -158,6 +167,8 @@ int main(int argc, char** argv) {
     if (fire) {
       const Job& j = jobs[done];
       const auto& e = j.out;
+      frame_skip[j.frame] += top.out_skipped;
+      fetch_count[j.frame] += !top.out_skipped;
       bool ok = top.out_id == e.id && top.out_skipped == (e.skipped ? 1u : 0u) && top.out_delta == e.delta &&
                 sext(top.out_mean_x) == e.attr.mean_x && sext(top.out_mean_y) == e.attr.mean_y &&
                 sext(top.out_cov_a) == e.attr.cov_a && sext(top.out_cov_b) == e.attr.cov_b &&
@@ -214,6 +225,7 @@ int main(int argc, char** argv) {
   const bool validate = thresh == 0 && Q_FRAC == 12;
   if (validate && (max_hw > tol_hw || max_exact > tol_exact)) ++fails;
   fails += mismatches != 0 || cycles < 10000;
+  fails += cycles != st.cycles;
   std::printf("validation: %llu alpha px, max |fixed - fp32_hw_exp| = %.5f (tol %.3f), max |fixed - fp32_exact| = "
               "%.5f (tol %.3f), mean %.5f, max frame |rtl - fp32| = %.5f%s\n",
               (unsigned long long)alpha_px, max_hw, tol_hw, max_exact, tol_exact, sum_exact / std::max<uint64_t>(1, alpha_px),
@@ -225,10 +237,15 @@ int main(int argc, char** argv) {
   std::printf("RESULT {\"q_frac\": %d, \"motion_thresh\": %u, \"cycles\": %llu, \"noskip_cycles\": %llu, "
               "\"transactions\": %zu, \"skipped\": %llu, \"skip_rate\": %.6f, \"speedup\": %.6f, \"psnr_db\": %.4f, "
               "\"mismatches\": %llu, \"max_alpha_dev_hw_exp\": %.6f, \"max_alpha_dev_exact\": %.6f, "
-              "\"max_frame_dev\": %.6f, \"pass\": %s}\n",
+              "\"max_frame_dev\": %.6f, \"pass\": %s",
               Q_FRAC, thresh, (unsigned long long)cycles, (unsigned long long)noskip, jobs.size(),
               (unsigned long long)st.skipped, skip_rate, double(noskip) / cycles, psnr, (unsigned long long)mismatches,
               max_hw, max_exact, frame_dev, fails ? "false" : "true");
+  std::printf(", \"Modeled External DRAM Traffic\": {\"bytes_per_gaussian\": %u, \"frames\": [", BYTES_PER_GAUSSIAN);
+  for (int fr = 0; fr < kFrameCount; ++fr)
+    std::printf("%s{\"fetch_count\": %" PRIu64 ", \"dram_read_bytes\": %" PRIu64 ", \"dram_write_bytes\": 0}",
+                fr ? ", " : "", fetch_count[fr], fetch_count[fr] * BYTES_PER_GAUSSIAN);
+  std::puts("]}}");
   std::puts(fails ? "FAIL" : "PASS");
   return fails ? 1 : 0;
 }

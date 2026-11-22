@@ -297,6 +297,13 @@ def top_props(nl):
         ("lossless: every LOOKUP enters full recompute at PROJ phase 0", "unsat", [(
             "recompute", state_d + nl.next_nets("phase"), lambda c: z3.And(lossless(c), state(c) == S_LOOKUP,
                 z3.Or(nxt("state", c) != S_PROJ, nxt("phase", c) != 0)))]),
+        ("bypass: an accepted transaction gets no cache response; bypassed transactions cannot fill", "unsat", [
+            ("lookup", nl.next_nets("lk_resp") + nl.next_nets("cache_bypass_q"), lambda c: z3.And(
+                state(c) == S_ACCEPT, cur("in_valid", c) == 1, cur("cache_bypass", c) == 1,
+                z3.Or(nxt("lk_resp", c) != 0, nxt("cache_bypass_q", c) != 1))),
+            ("fill", sum((nl.next_nets(n) for n in cache_state), []), lambda c: z3.And(
+                cur("cache_bypass_q", c) == 1, z3.Or(*[nxt(n, c) != cur(n, c) for n in cache_state]))),
+        ]),
         ("skip equivalence: under motion_thresh == 0 every datapath/control register is independent "
          "of cache contents (== full evaluation)", "unsat", [noninterference(n) for n in sorted(groups)]),
         ("FSM closed over legal states (0..6), including DIV/INV", "unsat", [("state_next", state_d, lambda c: z3.And(
@@ -317,7 +324,7 @@ def top_props(nl):
                 cur("in_ready", c) != b1(state(c) == S_ACCEPT), cur("out_valid", c) != b1(state(c) == S_OUT)))]),
         ("non-vacuity witness: with motion_thresh != 0 the result does depend on cache contents", "sat", [
             ("datapath_next", [nl.regs[q]["d"] for g in groups.values() for q in g], lambda c: z3.And(
-                cur("motion_thresh", c) != 0, z3.Or(*[(lambda e: e != z3.substitute(e, *alt))(
+                cur("cache_bypass_q", c) == 0, cur("motion_thresh", c) != 0, z3.Or(*[(lambda e: e != z3.substitute(e, *alt))(
                     nl.bv([nl.regs[q]["d"] for q in sorted(g)], c)) for g in groups.values()])))]),
         ("unbounded progress: positive rank in LOOKUP/PROJ/DIV/INV/RASTER strictly decreases", "unsat", [(
             "rank", control_roots, lambda c: z3.And(control_inv(cur, c), busy(c), z3.Or(

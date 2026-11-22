@@ -37,6 +37,7 @@ module gs4d_accelerator_top #(
     input  logic              clk,
     input  logic              rst_n,
     input  logic [W+1:0]      motion_thresh,
+    input  logic              cache_bypass,
     input  logic              in_valid,
     output logic              in_ready,
     input  logic [ID_W-1:0]   in_id,
@@ -92,7 +93,7 @@ module gs4d_accelerator_top #(
     // Captured transaction.
     logic [W-1:0] mu0x_q, mu0y_q, dmux_q, dmuy_q, s0x_q, s0y_q, dsx_q, dsy_q;
     logic [W-1:0] rho_q, opa_q, pix_x0_q, pix_y_q;
-    logic         skip_q;
+    logic         skip_q, cache_bypass_q;
 
     // Projection datapath (operand-isolated).
     logic [W-1:0] sx_q, sy_q, proj_a, proj_b, proj_p;
@@ -148,7 +149,7 @@ module gs4d_accelerator_top #(
     );
 
     assign proj_p   = fxmul(proj_a, proj_b);
-    assign cache_wr = state == S_PROJ && phase == 9;
+    assign cache_wr = state == S_PROJ && phase == 9 && !cache_bypass_q;
     assign wr_data  = {out_mean_x, out_mean_y, out_cov_a, fx_sub('0, proj_p), out_cov_c, out_opacity};
     assign det = fx_sub(ac_q, proj_p);
     assign trial = (remainder_q << 1) | (N+1)'(numerator[N-1]);
@@ -164,7 +165,7 @@ module gs4d_accelerator_top #(
     ) u_cache (
         .clk(clk),
         .rst_n(rst_n),
-        .lk_valid(accept),
+        .lk_valid(accept && !cache_bypass),
         .lk_set(in_id[SET_W-1:0]),
         .lk_tag(in_id[ID_W-1:SET_W]),
         .lk_resp(lk_resp),
@@ -198,6 +199,7 @@ module gs4d_accelerator_top #(
             cnt         <= '0;
             out_id      <= '0;
             skip_q      <= 1'b0;
+            cache_bypass_q <= 1'b0;
             out_skipped <= 1'b0;
             out_delta   <= '0;
             mu0x_q <= '0; mu0y_q <= '0; dmux_q <= '0; dmuy_q <= '0;
@@ -215,6 +217,7 @@ module gs4d_accelerator_top #(
                 S_ACCEPT: if (accept) begin
                     out_id   <= in_id;
                     skip_q   <= skip_deform && (def_dr == '0);
+                    cache_bypass_q <= cache_bypass;
                     out_delta <= skip_delta;
                     mu0x_q   <= in_mu0_x;  mu0y_q <= in_mu0_y;
                     dmux_q   <= def_dmu_x; dmuy_q <= def_dmu_y;

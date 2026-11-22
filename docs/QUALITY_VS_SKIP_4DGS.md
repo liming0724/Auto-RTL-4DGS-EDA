@@ -11,7 +11,7 @@ Reproduce (Verilator ≥ 4.038, Yosys 0.23, sv2v 0.0.12, Python venv with `z3-so
 ```sh
 make sim_4dgs            # Tier 1: Phase 3 bit-true testbench + deformation vectors
 make sim_4dgs_frame      # FP32-vs-fixed validation (Q_FRAC=12, T=0) + SSIM_v2 frame scoring
-make eval_quality_4dgs   # 12-point sweep -> build/4dgs/quality/quality_vs_skip.{csv,json,md}
+make eval_quality_4dgs   # 18-point sweep -> build/4dgs/quality/quality_vs_skip.{csv,json,md}
 make synth_4dgs          # Tier 2: Yosys/ABC generic cells + ABC CEC
 make formal_4dgs         # Tier 3: Z3 through eda_core (includes the new gs4d_deform target)
 ```
@@ -134,18 +134,25 @@ Spot checks on every point of the sweep:
 `make eval_quality_4dgs`: NUM_PE=1, CACHE_WAYS=2, CACHE_SETS=512. Cycles are the total
 cycle-accurate RTL cycles for all 8 frames. Speedup is the unskipped cycle count
 (`transactions × (3 + raster + projection)`) divided by the total cycles. PSNR is over
-all 8 frames against FP32, and HW SSIM is the mean `SSIM_v2` score. All 12 points have
-0 bit-true mismatches. Pareto is computed within each Q_FRAC on speedup and PSNR.
+all 8 frames against FP32, and HW SSIM is the mean `SSIM_v2` score. All 18 points have
+0 bit-true mismatches. The 12 original rows match a fresh run from Phase 4
+(`e49676f`) exactly. Pareto is computed within each Q_FRAC on speedup and PSNR.
 
 | Q_FRAC | MOTION_THRESH | Skip rate | Total cycles | Speedup | PSNR (dB) | HW SSIM | Pareto |
 |---:|---:|---:|---:|---:|---:|---:|:---:|
 | 8 | 0 | 0.0% | 5,044,240 | 1.000x | 44.73 | 0.99724 |  |
+| 8 | 1 | 84.2% | 1,670,590 | 3.019x | 44.73 | 0.99724 |  |
+| 8 | 2 | 86.0% | 1,600,903 | 3.151x | 44.74 | 0.99721 |  |
+| 8 | 3 | 86.8% | 1,569,070 | 3.215x | 44.74 | 0.99721 | yes |
 | 8 | 4 | 87.3% | 1,547,227 | 3.260x | 44.74 | 0.99723 | yes |
 | 8 | 8 | 88.9% | 1,484,776 | 3.397x | 44.73 | 0.99725 | yes |
 | 8 | 16 | 90.4% | 1,421,488 | 3.549x | 44.71 | 0.99726 | yes |
 | 8 | 32 | 91.9% | 1,362,358 | 3.703x | 44.62 | 0.99724 | yes |
 | 8 | 64 | 92.7% | 1,329,121 | 3.795x | 44.48 | 0.99724 | yes |
 | 12 | 0 | 0.0% | 6,231,120 | 1.000x | 47.74 | 0.99748 |  |
+| 12 | 1 | 82.6% | 1,941,555 | 3.209x | 47.74 | 0.99748 |  |
+| 12 | 2 | 82.7% | 1,938,825 | 3.214x | 47.74 | 0.99748 |  |
+| 12 | 3 | 82.9% | 1,925,840 | 3.236x | 47.74 | 0.99748 |  |
 | 12 | 4 | 83.0% | 1,919,400 | 3.246x | 47.74 | 0.99747 |  |
 | 12 | 8 | 83.8% | 1,879,535 | 3.315x | 47.74 | 0.99748 |  |
 | 12 | 16 | 85.2% | 1,804,565 | 3.453x | 47.74 | 0.99746 |  |
@@ -157,25 +164,42 @@ Observations:
 - **What the skip rate counts:** the skip rate includes the intended lossless
   reuse. Static background never changes, and every span after the first span of a
   Gaussian in a frame hits the cache with the same delta. Both are skipped at any
-  `MOTION_THRESH > 0`, which is where most of the jump from 0% to 83–87% comes from.
+  `MOTION_THRESH > 0` when the delta is zero, which accounts for the large jump at T=1.
   The thresholds then trade quality only on the moving Gaussians whose `|Δμ|₁ + |Δs|₁`
   falls below them.
 - **Thresholds are in LSBs:** `MOTION_THRESH` is in raw LSBs, so the same value means
   16× less motion at Q_FRAC=12 than at Q_FRAC=8. At Q_FRAC=12, T=64 is 0.0156 px
-  (L1). PSNR stays flat (47.74 dB) up to 3.61×, so the Q12 sweep never reaches its knee.
+  (L1). PSNR stays nearly flat (47.74 dB) up to 3.61×, so the sweep does not reach a
+  high-threshold quality-loss knee at Q12.
 - **Q8 trade-off:** at Q_FRAC=8, PSNR falls by 0.02 dB at T=16, 0.11 dB at T=32, and
   0.25 dB at T=64. Hardware SSIM moves by at most 0.00005, which is at the resolution
   of the FP16 SSIM IP, so PSNR is the more sensitive metric at these quality levels.
 - **Q8 is faster:** Q_FRAC=8 has fewer projection cycles (11 + 2F = 27 vs 35), so
   its unskipped run is 5.04 M vs 6.23 M cycles.
 
-### Knee-point recommendations
+### Phase 5a fine-sweep knee
 
-- **Q_FRAC=8, MOTION_THRESH=16 is the knee.** It runs at 3.55× (1.42 M cycles) for
+The first threshold with skip rate above 50% and PSNR loss below 0.5 dB
+relative to its own T=0 baseline is **MOTION_THRESH=1 at both precisions**.
+
+| Q_FRAC | T=0 PSNR (dB) | T=1 PSNR (dB) | PSNR loss (dB) | T=1 skip rate | T=1 cycles | T=1 speedup |
+|---:|---:|---:|---:|---:|---:|---:|
+| 8 | 44.7331 | 44.7331 | 0.0000 | 84.22% | 1,670,590 | 3.019× |
+| 12 | 47.7441 | 47.7441 | 0.0000 | 82.61% | 1,941,555 | 3.209× |
+
+The skip test is strict (`delta < MOTION_THRESH`). T=1 admits only zero
+quantized delta, subject to the cache-hit and zero-rho-change requirements.
+This early crossing is distinct from the higher-threshold operating points
+below. See [Modeled External DRAM Traffic](SYSTEM_BANDWIDTH_4DGS.md) for the
+separate cache-bypass comparison.
+
+### Higher-threshold operating points
+
+- **Q_FRAC=8, MOTION_THRESH=16 is a speed/quality trade-off.** It runs at 3.55× (1.42 M cycles) for
   −0.02 dB. Going to T=32 adds 4.3% speed for 5.5× the PSNR loss, and T=64 adds 6.9%
   speed for a 0.25 dB loss.
 - **Q_FRAC=12, MOTION_THRESH=64 is the best Q12 point in the sweep.** It runs at 3.61×
-  with no measurable loss (47.74 dB). The Q12 knee lies above T=64. T≈256 matches
+  with no measurable loss (47.74 dB). T≈256 matches
   Q8 T=16 in pixel units and is the next value to sweep.
 - **Across both Q_FRAC values:** compare absolute cycles, not speedups. Each speedup is
   relative to its own precision's unskipped baseline (Q8: 5,044,240 cycles; Q12:

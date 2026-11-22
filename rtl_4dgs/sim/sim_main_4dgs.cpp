@@ -190,6 +190,7 @@ int main(int argc, char** argv) {
   const size_t total = stim.size();
 
   Vgs4d_accelerator_top top;
+  top.cache_bypass = 0;
   top.motion_thresh = thresh;
   top.clk = 0;
   top.rst_n = 0;
