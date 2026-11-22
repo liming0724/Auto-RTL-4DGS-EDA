@@ -36,6 +36,18 @@ CACHE_SETS = 512
 FF_WEIGHT = 6
 
 
+def select_configs(names):
+    grid = [dict(num_pe=p, q_frac=q, cache_ways=w, cache_sets=CACHE_SETS)
+            for p, w, q in itertools.product(NUM_PE, CACHE_WAYS, Q_FRAC)]
+    if names is None:
+        return grid
+    available = {tag(c): c for c in grid}
+    unknown = set(names) - available.keys()
+    if not names or unknown:
+        raise ValueError(f"expected configuration tags from {', '.join(available)}; unknown: {sorted(unknown)}")
+    return [c for name, c in available.items() if name in names]
+
+
 def evaluate(cfg, args):
     out = args.out / tag(cfg)
     t0 = time.monotonic()
@@ -64,6 +76,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", type=Path, default=ROOT / "build/dse")
     ap.add_argument("--jobs", type=int, default=4)
+    ap.add_argument("--configs", nargs="+", help="only these hardware tags (e.g. pe1_q8_w2_s512); default: full grid")
+    ap.add_argument("--report-thresholds", type=int, nargs="+", choices=MOTION_THRESH, default=MOTION_THRESH,
+                    help="threshold rows to report; both thresholds are always simulated for verification")
     ap.add_argument("--resume", action="store_true",
                     help="reuse build/dse/<cfg>/synth/metrics.json if its source_sha256 matches (simulation always reruns)")
     ap.add_argument("--verilator", default="verilator")
@@ -71,10 +86,12 @@ def main():
     ap.add_argument("--sv2v", default="sv2v")
     ap.add_argument("--abc", default="berkeley-abc")
     args = ap.parse_args()
+    try:
+        cfgs = select_configs(args.configs)
+    except ValueError as error:
+        ap.error(str(error))
     args.out = args.out.resolve()
     args.out.mkdir(parents=True, exist_ok=True)
-    cfgs = [dict(num_pe=p, q_frac=q, cache_ways=w, cache_sets=CACHE_SETS)
-            for p, w, q in itertools.product(NUM_PE, CACHE_WAYS, Q_FRAC)]
     print(f"dse_4dgs: {len(cfgs)} hardware configurations x {len(MOTION_THRESH)} thresholds, "
           f"{args.jobs} parallel jobs", flush=True)
     start = time.monotonic()
@@ -86,6 +103,8 @@ def main():
         area = syn["optimized"]["and_nodes"] + FF_WEIGHT * syn["mapped"]["flip_flops"]
         delay = syn["optimized"]["levels"]
         for th, s in sims.items():
+            if th not in args.report_thresholds:
+                continue
             rows.append(dict(
                 num_pe=cfg["num_pe"], cache_ways=cfg["cache_ways"], q_frac=cfg["q_frac"], motion_thresh=th,
                 sim_cycles=s["sim_cycles"], active_cycles=s["active_cycles"], noskip_cycles=s["noskip_cycles"],
@@ -108,7 +127,8 @@ def main():
         writer.writerows(rows)
     (args.out / "dse_results.json").write_text(json.dumps(dict(
         grid=dict(NUM_PE=NUM_PE, CACHE_WAYS=CACHE_WAYS, Q_FRAC=Q_FRAC, MOTION_THRESH=MOTION_THRESH,
-                  CACHE_SETS=CACHE_SETS), ff_weight=FF_WEIGHT, rows=rows,
+                  CACHE_SETS=CACHE_SETS), configs=[tag(c) for c in cfgs],
+        report_thresholds=args.report_thresholds, ff_weight=FF_WEIGHT, rows=rows,
         seconds=round(time.monotonic() - start, 1)), indent=1) + "\n", encoding="utf-8")
 
     cols = ("num_pe", "cache_ways", "q_frac", "motion_thresh", "sim_cycles", "mismatches", "skip_rate",
