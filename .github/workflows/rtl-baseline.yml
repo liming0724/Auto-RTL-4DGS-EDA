@@ -33,6 +33,6 @@ jobs:
       - name: Z3 formal checks and CEGAR self-test
         run: make test_cegar PYTHON="$RUNNER_TEMP/venv/bin/python"
       - name: 4DGS lint and bit-true simulation
-        run: make sim_4dgs PYTHON="$RUNNER_TEMP/venv/bin/python" ABC=/usr/bin/berkeley-abc
+        run: make sim_4dgs PYTHON="$RUNNER_TEMP/venv/bin/python" ABC=yosys-abc
       - name: 4DGS synthesis, equivalence, and formal checks
-        run: make formal_4dgs PYTHON="$RUNNER_TEMP/venv/bin/python" ABC=/usr/bin/berkeley-abc
+        run: make formal_4dgs PYTHON="$RUNNER_TEMP/venv/bin/python" ABC=yosys-abc
