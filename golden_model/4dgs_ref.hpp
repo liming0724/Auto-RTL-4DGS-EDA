@@ -162,8 +162,8 @@ struct ConicCheck {
       if (std::abs(values[i]*unit-refs[i]) > tol) ++failures;
     }
   }
-  void report(int f) const {
-    std::printf("conic cross-check Q_FRAC=%d checked=%llu out_of_range=%llu inv_saturated=%llu failures=%llu\n",
+  void report(int f, std::FILE* out = stdout) const {
+    std::fprintf(out, "conic cross-check Q_FRAC=%d checked=%llu out_of_range=%llu inv_saturated=%llu failures=%llu\n",
                 f, (unsigned long long)checked, (unsigned long long)out_of_range,
                 (unsigned long long)saturated, (unsigned long long)failures);
   }

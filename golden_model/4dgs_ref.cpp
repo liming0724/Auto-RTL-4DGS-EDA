@@ -91,7 +91,7 @@ int main(int argc, char** argv) {
     ConicCheck check;
     for (int t = 0; t < kFrames; ++t)
       for (const auto& g : make_frame(scene, t, f)) check.check(fx, g, project(fx, g));
-    check.report(f);
+    check.report(f, stderr);
     fails += check.failures != 0;
   }
   const auto directed = directed_conic(8);
@@ -106,7 +106,7 @@ int main(int argc, char** argv) {
   }
   const auto alpha = lane_alpha(Fx(8), directed.pix_x0, directed.pix_y, project(Fx(8), directed));
   if (alpha != 233 || alpha == 35) ++fails;
-  std::printf("directed conic Q_FRAC=8 alpha=%lld expected=233 (not 35)\n", (long long)alpha);
+  std::fprintf(stderr, "directed conic Q_FRAC=8 alpha=%lld expected=233 (not 35)\n", (long long)alpha);
   if (sweep) {
     std::printf("num_pe,cache_ways,q_frac,motion_thresh,gaussians,skipped,skip_rate,cycles,"
                 "cycles_noskip,speedup,mults,mults_noskip,alpha_err_px,max_alpha_err\n");
