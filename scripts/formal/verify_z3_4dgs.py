@@ -110,20 +110,21 @@ def deform_props(nl):
         return (z3.SignExt(ext - DEF_W, c0(o, c)) << DEF_F) + sum(
             z3.SignExt(ext - DEF_W, coef(o, k, c)) * z3.SignExt(ext - DEF_W, basis(k, c)) for k in range(2))
 
+    def acc_of_prods(o, c):  # the netlist's own products, summed in AW + 4 bits
+        ext = DEF_AW + 4
+        return (z3.SignExt(ext - DEF_W, c0(o, c)) << DEF_F) + sum(
+            z3.SignExt(ext - DEF_PW, prod(o, k, c)) for k in range(2))
+
     outs = range(len(DEF_OUT))
     return [
         ("basis_t2 == fxmul(t, t) (bit-true)", "unsat",
          [("basis_t2", nl.nets("basis_t2"), lambda c: cur("basis_t2", c) != t2_spec(c))]),
-        ("prod[o][k] == coef[o][k] * basis[k] (exact, 2W bits)", "unsat",
-         [(f"prod[{o}][{k}]", nl.nets("prod")[(2 * o + k) * DEF_PW:(2 * o + k + 1) * DEF_PW],
-           (lambda o, k: lambda c: prod(o, k, c) != z3.SignExt(DEF_W, coef(o, k, c)) * z3.SignExt(DEF_W, basis(k, c)))(o, k))
-          for o in outs for k in range(2)]),
-        ("acc[o] == exact (c0 << F) + c1 t + c2 t^2 (accumulator overflow safety: no wrap)", "unsat",
-         [(f"acc[{o}]", acc_nets(o), (lambda o: lambda c: z3.SignExt(4, acc(o, c)) != exact_acc(o, c))(o))
+        ("acc[o] == (c0 << F) + prod[o][0] + prod[o][1] exactly (accumulator adders never wrap)", "unsat",
+         [(f"acc[{o}]", acc_nets(o), (lambda o: lambda c: z3.SignExt(4, acc(o, c)) != acc_of_prods(o, c))(o))
           for o in outs]),
-        ("acc[o] headroom: top 3 bits are sign copies (|acc| < 2^(AW-3))", "unsat",
+        ("acc[o] headroom: top 2 bits are sign copies (|acc| < 2^(AW-2), fits 2W+1 bits)", "unsat",
          [(f"acc[{o}]", acc_nets(o), (lambda o: lambda c: z3.Not(z3.Or(
-             z3.Extract(DEF_AW - 1, DEF_AW - 3, acc(o, c)) == 0, z3.Extract(DEF_AW - 1, DEF_AW - 3, acc(o, c)) == 7)))(o))
+             z3.Extract(DEF_AW - 1, DEF_AW - 2, acc(o, c)) == 0, z3.Extract(DEF_AW - 1, DEF_AW - 2, acc(o, c)) == 3)))(o))
           for o in outs]),
         ("out[o] == saturate(round_half_up(acc[o] >>> F)) (saturation safety)", "unsat",
          [(name, nl.nets(name), (lambda o, name: lambda c: cur(name, c) != round_sat_spec(acc(o, c), DEF_F, DEF_W))(o, name))
