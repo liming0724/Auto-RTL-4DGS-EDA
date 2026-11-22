@@ -24,6 +24,10 @@
 // leaves the projection datapath with zero toggling.
 // With motion_thresh == 0, skip_deform is constantly 0 (delta < 0 is false), so every
 // Gaussian takes the full recompute path (lossless mode).
+// cache_bypass (quasi-static, like motion_thresh): 1 forces every LOOKUP to see a miss, so
+// every Gaussian takes the full recompute path from its streamed parameters. Fills are
+// not suppressed: the cache keeps its normal lookup/fill/replacement sequence and stays
+// warm, and the bypass only masks the hit at the top (motion_aware_cache is unchanged).
 module gs4d_accelerator_top #(
     parameter int NUM_PE     = 1,
     parameter int Q_FRAC     = 8,
@@ -37,6 +41,7 @@ module gs4d_accelerator_top #(
     input  logic              clk,
     input  logic              rst_n,
     input  logic [W+1:0]      motion_thresh,
+    input  logic              cache_bypass,
     input  logic              in_valid,
     output logic              in_ready,
     input  logic [ID_W-1:0]   in_id,
@@ -110,11 +115,13 @@ module gs4d_accelerator_top #(
 
     logic         accept;
     logic         lk_resp, lk_hit, cache_wr;
+    logic         lk_serve;
     logic [DW-1:0] lk_rdata, wr_data;
 
     assign in_ready  = state == S_ACCEPT;
     assign out_valid = state == S_OUT;
     assign accept    = in_valid && in_ready;
+    assign lk_serve  = lk_resp && lk_hit && !cache_bypass;
 
     // Deformation front-end: all basis-specific math lives in deform_engine.sv.
     logic [W-1:0] def_dmu_x, def_dmu_y, def_ds_x, def_ds_y, def_dr;
@@ -227,7 +234,7 @@ module gs4d_accelerator_top #(
                 end
                 S_LOOKUP: begin
                     cnt <= '0;
-                    if (skip_q && lk_resp && lk_hit) begin
+                    if (skip_q && lk_serve) begin
                         out_skipped <= 1'b1;
                         {out_mean_x, out_mean_y, out_cov_a, out_cov_b, out_cov_c, out_opacity} <= lk_rdata;
                         state <= S_RASTER;

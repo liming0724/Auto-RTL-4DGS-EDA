@@ -11,7 +11,7 @@ Reproduce (Verilator ≥ 4.038, Yosys 0.23, sv2v 0.0.12, Python venv with `z3-so
 ```sh
 make sim_4dgs            # Tier 1: Phase 3 bit-true testbench + deformation vectors
 make sim_4dgs_frame      # FP32-vs-fixed validation (Q_FRAC=12, T=0) + SSIM_v2 frame scoring
-make eval_quality_4dgs   # 12-point sweep -> build/4dgs/quality/quality_vs_skip.{csv,json,md}
+make eval_quality_4dgs   # 18-point sweep -> build/4dgs/quality/quality_vs_skip.{csv,json,md}
 make synth_4dgs          # Tier 2: Yosys/ABC generic cells + ABC CEC
 make formal_4dgs         # Tier 3: Z3 through eda_core (includes the new gs4d_deform target)
 ```
@@ -134,18 +134,26 @@ Spot checks on every point of the sweep:
 `make eval_quality_4dgs`: NUM_PE=1, CACHE_WAYS=2, CACHE_SETS=512. Cycles are the total
 cycle-accurate RTL cycles for all 8 frames. Speedup is the unskipped cycle count
 (`transactions × (3 + raster + projection)`) divided by the total cycles. PSNR is over
-all 8 frames against FP32, and HW SSIM is the mean `SSIM_v2` score. All 12 points have
+all 8 frames against FP32, and HW SSIM is the mean `SSIM_v2` score. All 18 points have
 0 bit-true mismatches. Pareto is computed within each Q_FRAC on speedup and PSNR.
+Phase 5a added MOTION_THRESH 1, 2 and 3 (six new points). The 12 Phase 4 points reproduce
+exactly: every CSV field matches the e49676f run, and their Pareto marks are unchanged.
 
 | Q_FRAC | MOTION_THRESH | Skip rate | Total cycles | Speedup | PSNR (dB) | HW SSIM | Pareto |
 |---:|---:|---:|---:|---:|---:|---:|:---:|
 | 8 | 0 | 0.0% | 5,044,240 | 1.000x | 44.73 | 0.99724 |  |
+| 8 | 1 | 84.2% | 1,670,590 | 3.019x | 44.73 | 0.99724 |  |
+| 8 | 2 | 86.0% | 1,600,903 | 3.151x | 44.74 | 0.99721 |  |
+| 8 | 3 | 86.8% | 1,569,070 | 3.215x | 44.74 | 0.99721 | yes |
 | 8 | 4 | 87.3% | 1,547,227 | 3.260x | 44.74 | 0.99723 | yes |
 | 8 | 8 | 88.9% | 1,484,776 | 3.397x | 44.73 | 0.99725 | yes |
 | 8 | 16 | 90.4% | 1,421,488 | 3.549x | 44.71 | 0.99726 | yes |
 | 8 | 32 | 91.9% | 1,362,358 | 3.703x | 44.62 | 0.99724 | yes |
 | 8 | 64 | 92.7% | 1,329,121 | 3.795x | 44.48 | 0.99724 | yes |
 | 12 | 0 | 0.0% | 6,231,120 | 1.000x | 47.74 | 0.99748 |  |
+| 12 | 1 | 82.6% | 1,941,555 | 3.209x | 47.74 | 0.99748 |  |
+| 12 | 2 | 82.7% | 1,938,825 | 3.214x | 47.74 | 0.99748 |  |
+| 12 | 3 | 82.9% | 1,925,840 | 3.236x | 47.74 | 0.99748 |  |
 | 12 | 4 | 83.0% | 1,919,400 | 3.246x | 47.74 | 0.99747 |  |
 | 12 | 8 | 83.8% | 1,879,535 | 3.315x | 47.74 | 0.99748 |  |
 | 12 | 16 | 85.2% | 1,804,565 | 3.453x | 47.74 | 0.99746 |  |
@@ -168,6 +176,42 @@ Observations:
   of the FP16 SSIM IP, so PSNR is the more sensitive metric at these quality levels.
 - **Q8 is faster:** Q_FRAC=8 has fewer projection cycles (11 + 2F = 27 vs 35), so
   its unskipped run is 5.04 M vs 6.23 M cycles.
+
+### Fine sweep: where skipping starts (Phase 5a)
+
+MOTION_THRESH 1, 2 and 3 locate the knee between T=0 and T=4. The criterion is the first
+threshold where the skip rate crosses 50% with a PSNR drop under 0.5 dB vs the same
+Q_FRAC's T=0 baseline.
+
+| Q_FRAC | T | Skip rate | Total cycles | Speedup | PSNR (dB) | ΔPSNR vs T=0 (dB) | HW SSIM |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 8 | 0 | 0.0% | 5,044,240 | 1.000x | 44.7331 | — | 0.99724 |
+| 8 | 1 | 84.2% | 1,670,590 | 3.019x | 44.7331 | 0.0000 | 0.99724 |
+| 8 | 2 | 86.0% | 1,600,903 | 3.151x | 44.7358 | +0.0027 | 0.99721 |
+| 8 | 3 | 86.8% | 1,569,070 | 3.215x | 44.7359 | +0.0028 | 0.99721 |
+| 8 | 4 | 87.3% | 1,547,227 | 3.260x | 44.7354 | +0.0023 | 0.99723 |
+| 12 | 0 | 0.0% | 6,231,120 | 1.000x | 47.7441 | — | 0.99748 |
+| 12 | 1 | 82.6% | 1,941,555 | 3.209x | 47.7441 | 0.0000 | 0.99748 |
+| 12 | 2 | 82.7% | 1,938,825 | 3.214x | 47.7441 | 0.0000 | 0.99748 |
+| 12 | 3 | 82.9% | 1,925,840 | 3.236x | 47.7441 | 0.0000 | 0.99748 |
+| 12 | 4 | 83.0% | 1,919,400 | 3.246x | 47.7441 | 0.0000 | 0.99747 |
+
+(PSNR to 4 decimals from `quality_vs_skip.csv`.)
+
+- **The knee is MOTION_THRESH=1 at both Q_FRAC values.** The skip rate goes from 0% to
+  84.2% (Q8) and 82.6% (Q12) in one LSB, with a PSNR change of 0.0000 dB.
+- **T=1 is lossless:** `delta < 1` means `delta == 0`, so T=1 only skips Gaussians whose
+  deformed Δμ and Δs are exactly zero (static background, and repeat spans of the same
+  Gaussian in a frame, which reuse attributes computed from the same deltas). The PSNR and
+  HW SSIM at T=1 equal T=0 to every printed digit. This confirms the Phase 4
+  observation that most of the 0% → 83–87% jump is intended lossless reuse.
+- **No knee inside 0 < T < 4 beyond T=1:** T=2..4 add 1.8–3.1 points of skip rate at Q8
+  and 0.1–0.4 points at Q12. At Q8, PSNR moves by +0.002–0.003 dB, which is noise from
+  reusing a slightly stale conic rather than a quality gain. At Q12, PSNR is unchanged.
+- **Pareto with the new points (within each Q_FRAC):** at Q8, T=3 joins the front.
+  T=1 and T=2 are dominated by T=3, which is faster with PSNR at least as high. At Q12,
+  T=1..3 are dominated by T=32 (faster, higher PSNR), like T=4..16 in Phase 4. The
+  Phase 4 Pareto marks are unchanged.
 
 ### Knee-point recommendations
 
@@ -217,7 +261,8 @@ area or timing.
 `make formal_4dgs` netlists each target with sv2v and Yosys, then checks it with Z3
 through `eda_core/`. Each query has a 30 s timeout and 3 attempts. A query that times out
 falls back to per-output-bit COI slices, then to BMC-20. Result: **43/43 obligations as
-expected** (43 Z3 queries).
+expected** (43 Z3 queries). Phase 5a adds the `cache_bypass` input and two `gs4d_top`
+obligations, for 45/45; see `docs/FORMAL_VERIFICATION.md`.
 
 | Target | Netlist params | Obligations | Result |
 |---|---|---:|---|

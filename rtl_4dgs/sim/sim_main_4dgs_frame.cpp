@@ -8,7 +8,14 @@
 // Reports skip rate, cycles vs. the unskipped cycle count, PSNR vs. FP32, and the
 // FP32-vs-fixed validation (per-pixel alpha and frame deviation, directed conic case).
 // Writes FP16 RGB frames (gt_f<k>.hex, rtl_f<k>.hex) for the SSIM_v2 testbench.
-// Usage: Vgs4d_accelerator_top +thresh=<N> +out=<dir>
+// Bandwidth profiler (Phase 5a): per frame, fetch_count = transactions whose 2D attributes
+// were NOT served from the on-chip cache (RTL out_skipped == 0), and Modeled External DRAM
+// Traffic dram_read_bytes = fetch_count * BYTES_PER_GAUSSIAN, where BYTES_PER_GAUSSIAN is
+// the byte-rounded sum of the top's per-Gaussian input fields; dram_write_bytes = 0 (the
+// design has no write path to external memory).
+// With +bypass=1 (cache_bypass) every lookup is a forced miss, so the golden model is the
+// T=0 model (cache contents can never reach an output); out_delta is threshold-independent.
+// Usage: Vgs4d_accelerator_top +thresh=<N> +out=<dir> [+bypass=<0|1>]
 #include <algorithm>
 #include <cinttypes>
 #include <cmath>
@@ -27,11 +34,24 @@
 #ifndef Q_FRAC
 #define Q_FRAC 8
 #endif
+#ifndef CACHE_WAYS
+#define CACHE_WAYS 2
+#endif
 
 namespace {
 
 constexpr int W = 8 + Q_FRAC;
 constexpr uint64_t kMask = (uint64_t{1} << W) - 1;
+// Per-Gaussian input fields of gs4d_accelerator_top: in_id (ID_W = 12), twelve W-bit fields
+// (mu0_x/y, dmu_x/y, s0_x/y, ds_x/y, rho, opacity, pix_x0, pix_y), in_t (W) and in_coef (10*W).
+constexpr int kIdW = 12;
+constexpr int kInputBits = kIdW + 23 * W;
+constexpr int kBytesPerGaussian = (kInputBits + 7) / 8;
+// Conservative variant: a cache-served transaction still needs every field except the six
+// base fields the cached attributes replace (mu0_x/y, s0_x/y, rho, opacity), because the
+// skip decision (deform_engine + temporal_skip_unit) and the raster lanes run on it.
+constexpr int kServedBits = kInputBits - 6 * W;
+constexpr int kServedBytes = (kServedBits + 7) / 8;
 using gs4d_frame::Frame;
 
 int64_t sext(uint64_t v) {
@@ -71,15 +91,17 @@ struct Job { gs4d_ref::GaussIn in; gs4d_ref::GaussOut out; int gauss, frame; };
 
 int main(int argc, char** argv) {
   Verilated::commandArgs(argc, argv);
-  uint32_t thresh = 0;
+  uint32_t thresh = 0, bypass = 0;
   std::string dir = ".";
   for (int i = 1; i < argc; ++i) {
     if (!std::strncmp(argv[i], "+thresh=", 8)) thresh = static_cast<uint32_t>(std::atoi(argv[i] + 8));
     if (!std::strncmp(argv[i], "+out=", 5)) dir = argv[i] + 5;
+    if (!std::strncmp(argv[i], "+bypass=", 8)) bypass = std::atoi(argv[i] + 8) != 0;
   }
   using namespace gs4d_frame;
   const auto scene = make_scene();
-  gs4d_ref::Config cfg{1, Q_FRAC, 2, 512, thresh};
+  gs4d_ref::Config cfg{1, Q_FRAC, CACHE_WAYS, 512, bypass ? 0u : thresh};
+  const gs4d_ref::Fx fx(Q_FRAC);
   gs4d_ref::Accelerator model(cfg);
   gs4d_ref::Stats st;
   const double unit = std::ldexp(1.0, -Q_FRAC);
@@ -115,17 +137,21 @@ int main(int argc, char** argv) {
 
   std::vector<Job> jobs;
   std::vector<uint64_t> frame_tx(kFrameCount), frame_skip(kFrameCount);
+  uint64_t skip_eligible = 0;  // temporal_skip_unit decision at the requested threshold
   for (int fr = 0; fr < kFrameCount; ++fr)
     for (const Span& sp : bin_spans(scene, fr)) {
       Job j{quantize(scene[sp.gauss], sp, fr, Q_FRAC), {}, sp.gauss, fr};
       j.out = model.step(j.in, &st);
       ++frame_tx[fr];
       frame_skip[fr] += j.out.skipped;
+      const gs4d_ref::GaussIn d = gs4d_ref::deform(fx, j.in);
+      skip_eligible += gs4d_ref::temporal_delta(d) < thresh && d.drho == 0;
       jobs.push_back(j);
     }
 
   Vgs4d_accelerator_top top;
   top.motion_thresh = thresh;
+  top.cache_bypass = bypass;
   top.out_ready = 1;
   top.in_valid = 0;
   for (int i = 0; i < 4; ++i) {  // clocked reset
@@ -137,6 +163,7 @@ int main(int argc, char** argv) {
   std::vector<Accum> rtl_acc(kFrameCount);
   double max_hw = 0, max_exact = 0, sum_exact = 0;
   uint64_t alpha_px = 0;
+  std::vector<uint64_t> frame_fetch(kFrameCount), frame_served(kFrameCount);
   while (done < jobs.size()) {
     top.clk = 0;
     top.in_valid = next < jobs.size();
@@ -179,6 +206,7 @@ int main(int argc, char** argv) {
         ++alpha_px;
       }
       mismatches += !ok;
+      (top.out_skipped ? frame_served : frame_fetch)[j.frame]++;
       ++done;
     }
     top.clk = 1;
@@ -229,6 +257,29 @@ int main(int argc, char** argv) {
               Q_FRAC, thresh, (unsigned long long)cycles, (unsigned long long)noskip, jobs.size(),
               (unsigned long long)st.skipped, skip_rate, double(noskip) / cycles, psnr, (unsigned long long)mismatches,
               max_hw, max_exact, frame_dev, fails ? "false" : "true");
+  uint64_t fetch = 0, served = 0;
+  std::string fetch_list, bytes_list;
+  for (int fr = 0; fr < kFrameCount; ++fr) {
+    fetch += frame_fetch[fr];
+    served += frame_served[fr];
+    fetch_list += (fr ? ", " : "") + std::to_string(frame_fetch[fr]);
+    bytes_list += (fr ? ", " : "") + std::to_string(frame_fetch[fr] * kBytesPerGaussian);
+    std::printf("bandwidth frame_%d: transactions=%llu fetch_count=%llu cache_served=%llu dram_read_bytes=%llu "
+                "dram_write_bytes=0 (Modeled External DRAM Traffic)\n", fr, (unsigned long long)frame_tx[fr],
+                (unsigned long long)frame_fetch[fr], (unsigned long long)frame_served[fr],
+                (unsigned long long)(frame_fetch[fr] * kBytesPerGaussian));
+  }
+  if (served != st.skipped) ++fails;
+  std::printf("BANDWIDTH {\"q_frac\": %d, \"cache_ways\": %d, \"cache_bypass\": %u, \"motion_thresh\": %u, "
+              "\"frames\": %d, \"input_bits_per_gaussian\": %d, \"bytes_per_gaussian\": %d, "
+              "\"served_bytes_per_gaussian\": %d, \"skip_eligible\": %llu, \"fetch_count\": %llu, "
+              "\"cache_served\": %llu, \"dram_read_bytes\": %llu, \"dram_read_bytes_conservative\": %llu, "
+              "\"dram_write_bytes\": 0, \"frame_fetch_count\": [%s], \"frame_dram_read_bytes\": [%s]}\n",
+              Q_FRAC, CACHE_WAYS, bypass, thresh, kFrameCount, kInputBits, kBytesPerGaussian, kServedBytes,
+              (unsigned long long)skip_eligible, (unsigned long long)fetch, (unsigned long long)served,
+              (unsigned long long)(fetch * kBytesPerGaussian),
+              (unsigned long long)(fetch * kBytesPerGaussian + served * kServedBytes), fetch_list.c_str(),
+              bytes_list.c_str());
   std::puts(fails ? "FAIL" : "PASS");
   return fails ? 1 : 0;
 }

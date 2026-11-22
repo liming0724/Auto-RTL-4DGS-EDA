@@ -148,6 +148,31 @@ Steps:
 
 `make test_cegar` takes about 3 minutes, most of it the faulty Verilator build.
 
+## Phase 5a: `cache_bypass` in the 4DGS harness
+
+`gs4d_accelerator_top` has a new top-level input `cache_bypass` (`docs/SYSTEM_BANDWIDTH_4DGS.md`).
+`scripts/formal/verify_z3_4dgs.py` models it as a free input in every `gs4d_top` obligation.
+`make formal_4dgs` result: **45/45 obligations as expected** (45 Z3 queries). The Phase 4
+count was 43; `gs4d_top` goes from 19 to 21 obligations.
+
+- **Existing 19 `gs4d_top` obligations: unchanged.** They hold for both values of
+  `cache_bypass`, so they cover the default `cache_bypass == 0` behavior exactly as before.
+  This includes lossless mode, skip equivalence, the FSM, backpressure, handshakes, the
+  divider, the rank and BMC-20. No UNSAT obligation gained an assumption.
+- **Non-vacuity witness (SAT), narrowed on purpose:** "with `motion_thresh != 0` and
+  `cache_bypass == 0` the result does depend on cache contents". The witness is pinned to
+  `cache_bypass == 0` so that it exercises the default mode. Without the pin, Z3 could
+  satisfy it with either value. Pinning a SAT witness makes it stronger, not weaker.
+- **New: forced miss (UNSAT).** `cache_bypass == 1` implies that every LOOKUP enters full
+  recompute at PROJ phase 0 with `out_skipped == 0`, for any `motion_thresh`.
+- **New: bypass independence (UNSAT).** Under `cache_bypass == 1`, every datapath and
+  control register's next state is independent of cache contents (39 output cones). This
+  is the same noninterference miter as lossless skip equivalence, assumed under the bypass
+  instead of `motion_thresh == 0`. It shows that cache fills, which stay enabled under the
+  bypass, cannot leak into results.
+
+All queries are monolithic within the 30 s timeout. None needs the COI or BMC fallback.
+
 ## Limits
 
 * Proofs are against the netlist from Yosys, not the RTL text. Tier 2 CEC and Tier 1
