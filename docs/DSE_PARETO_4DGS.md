@@ -103,6 +103,8 @@ in §6 has not been rerun.
 | Opaque SRAM ways / bits | 2 / 101,376 | 2 / 101,376 |
 | ABC CEC (both comparisons) | PASS | PASS |
 
+The pre-fix baseline is measured on merged main `1a30afc` (which includes the five review-fix commits after the PR #4 review: phase-counter sizing, round-robin victim wrap, `--resume` SHA256 check, per-pixel multiply count, and docs refresh), not on the PR #4 review head `4b0eabf`.
+
 ## 5. Tier 3 — Z3 proofs (eda_core, 30 s breaker, COI slicing, BMC-20)
 
 Netlists are produced by `scripts/formal/rtl_to_netlist.py` in small formal configurations
@@ -144,11 +146,12 @@ Netlists are produced by `scripts/formal/rtl_to_netlist.py` in small formal conf
 
 **Corrected conic run:** `make formal_4dgs` passes end-to-end using Verilator
 4.038, sv2v 0.0.12, Yosys 0.23, Berkeley ABC and Z3 5.4.1: **36/36 obligations,
-36 queries, 5.52 s** in the Z3 stage. All unbounded obligations close
+36 queries**, approximately 5.52 s in the Z3 stage on the Devin machine;
+timing is machine-dependent. All unbounded obligations close
 monolithically; the explicit BMC-20 control-safety check also passes. No timeout,
 COI fallback or bounded downgrade was needed. Lossless cache non-interference
 takes 1.21 s, cache coherency 0.24 s, control-invariant induction 0.01 s,
-unbounded progress 0.02 s, and the 51-output-cone restoring-step check 0.19 s.
+unbounded progress 0.02 s, and the 52-output-cone restoring-step check 0.19 s.
 Per-obligation times and results are written to `build/formal/formal_4dgs.json`
 and `build/formal/formal_4dgs.log` (not committed).
 
