@@ -11,6 +11,14 @@
 
 ## 1. What was built
 
+The frame/DSE tables and original synthesis/proof tables below are historical
+pre-conic-inversion measurements. The corrected projection uses inverse covariance
+in the historically named `cov_a/b/c` fields. Its FSM is
+`ACCEPT -> LOOKUP -> PROJ(phase 0..5) -> DIV(17 cycles at F=8) -> INV ->
+PROJ(phase 7..9) -> RASTER -> OUT`, with the existing cache-hit skip bypass.
+Projection costs `11+2*Q_FRAC` cycles; at F=8 the default transaction costs 34 active
+cycles including acceptance and output consumption (33 edges to `out_valid`).
+
 | Item | File(s) | Notes |
 |---|---|---|
 | Bit-true golden model | `golden_model/4dgs_ref.hpp`, `golden_model/4dgs_ref.cpp` | Q(7,`Q_FRAC`) signed fixed point (half-up rounding, saturation, same API as `ref_model/include/gs4d/fixed_point.hpp`); deformation `mu(t)=mu0+dmu(t)`, `s(t)=s0+ds(t)`; 2D covariance projection; L1 skip test; set-associative cache; CLI stimulus/trace generator (`--trace-dir`, `--sweep`) |
@@ -76,12 +84,29 @@ All 18 configurations are listed in §6. The datapath has single-cycle `fxmul` s
 half-up rounding and saturation in one combinational stage), so logic depth is expected to track
 the operand width (`Q_FRAC`) rather than `NUM_PE` or `CACHE_WAYS`; §6 shows the measured levels.
 
+### Corrected conic projection: default configuration
+
+Fresh Yosys 0.23 / Berkeley ABC **generic-cell** synthesis and both ABC CEC checks
+pass with the sequential restoring divider. These are area/depth proxies, not
+physical cell area, nanosecond delay or 130nm measurements. The historical sweep
+in §6 has not been rerun.
+
+| Metric | Pre-fix default above | Corrected default |
+|---|---:|---:|
+| Generic gates | 27,571 | 28,509 |
+| Flip-flops | 2,118 | 2,275 |
+| Optimized AIG AND nodes | 32,540 | 33,384 |
+| Optimized AIG logic levels | 339 | 335 |
+| Opaque SRAM ways / bits | 2 / 101,376 | 2 / 101,376 |
+| ABC CEC (both comparisons) | PASS | PASS |
+
 ## 5. Tier 3 — Z3 proofs (eda_core, 30 s breaker, COI slicing, BMC-20)
 
 Netlists are produced by `scripts/formal/rtl_to_netlist.py` in small formal configurations
 (`gs4d_skip_unit`: W=16; `gs4d_cache`: 4 sets × 2 ways, 8-bit data, 2-bit tag; `gs4d_top`:
 `NUM_PE=1, Q_FRAC=8, CACHE_WAYS=2, CACHE_SETS=4, ID_W=4`) and loaded through `eda_core`
-(`parser.py` + `fast_eda`). Result of `make formal_4dgs`:
+(`parser.py` + `fast_eda`). Historical pre-conic result of `make formal_4dgs`
+(the corrected control proof is described after this table):
 
 | Target | Obligation | Expect | Result | Method | Time (s) | Verdict |
 |---|---|---|---|---|---|---|
@@ -114,6 +139,16 @@ Netlists are produced by `scripts/formal/rtl_to_netlist.py` in small formal conf
 
 **26/26 obligations as expected, 26 Z3 queries** (5.4.1, timeout 30 s, 3.89 s total). No obligation needed COI slicing or the BMC-20 fallback; BMC-20 is used deliberately for the reset-reachability check.
 
+**Corrected conic run:** `make formal_4dgs` passes end-to-end using Verilator
+4.038, sv2v 0.0.12, Yosys 0.23, Berkeley ABC and Z3 5.4.1: **36/36 obligations,
+36 queries, 5.52 s** in the Z3 stage. All unbounded obligations close
+monolithically; the explicit BMC-20 control-safety check also passes. No timeout,
+COI fallback or bounded downgrade was needed. Lossless cache non-interference
+takes 1.21 s, cache coherency 0.24 s, control-invariant induction 0.01 s,
+unbounded progress 0.02 s, and the 51-output-cone restoring-step check 0.19 s.
+Per-obligation times and results are written to `build/formal/formal_4dgs.json`
+and `build/formal/formal_4dgs.log` (not committed).
+
 Proof structure:
 
 * **Skip equivalence (lossless mode).** Under `motion_thresh == 0`, `skip_deform` is never 1 and
@@ -128,11 +163,37 @@ Proof structure:
   hold at reset and are inductive; under them, a lookup response coincident with a write-back
   reports exactly the post-write array (hit data or miss), and a write changes only
   `(sel_set, sel_way)` with `{sel_tag, wr_data}`.
-* **Back-pressure / deadlock freedom.** In `OUT` with `out_ready == 0`, the FSM, all output
+* **Back-pressure / deadlock freedom (corrected conic FSM).** In `OUT` with `out_ready == 0`, the FSM, all output
   registers and the whole cache (arrays, valid, round-robin) are frozen and `in_ready == 0`. The FSM
-  stays in its 5 legal states; `OUT ∧ out_ready → ACCEPT`, `ACCEPT ∧ in_valid → LOOKUP`; a ranking
-  function strictly decreases in every cycle of `LOOKUP/PROJ/RASTER`, so the only waiting states are
-  the two handshake states. BMC-20 from reset confirms the first result appears within 11 cycles.
+  stays in its 7 legal states; `OUT ∧ out_ready → ACCEPT`, `ACCEPT ∧ in_valid → LOOKUP`.
+  A reset-established, inductive control invariant constrains PROJ phases to 0..5 or
+  7..9, DIV to phase 6 and `div_count < 17`, INV to phase 6 and `div_count == 17`,
+  and RASTER to `cnt < 4`. Under it, the unsigned 8-bit rank is:
+
+  | State | Rank |
+  |---|---|
+  | LOOKUP | 32 |
+  | PROJ, phase 0..5 | 31 - phase |
+  | DIV | 25 - div_count |
+  | INV | 8 |
+  | PROJ, phase 7..9 | 14 - phase |
+  | RASTER | 4 - cnt |
+  | ACCEPT / OUT | 0 |
+
+  Every busy step has positive rank, strictly decreases it, and cannot return to
+  ACCEPT. Thus every accepted transaction reaches OUT, independently of cache and
+  arithmetic data; only the two handshake states can wait. This is an **unbounded
+  inductive progress proof**, not bounded liveness. Recompute needs 33 edges to
+  `out_valid`, exceeding 20, so BMC remains at **k=20** and checks reset-reachable
+  control safety, not an impossible 20-cycle completion bound.
+* **Divider.** Additional gate-netlist obligations check rounded-numerator
+  initialization from the latched determinant, zero initial quotient/remainder, nonpositive-det
+  degeneracy, the saturation mux, each bit of the restoring quotient/remainder/
+  numerator recurrence, and INV loading. These are compositional local-step
+  checks, not a monolithic endpoint division miter.
+* **Proof acceptance.** The 30-second per-query, three-attempt, COI-slicing and
+  BMC-20 fallback policy is unchanged. A bounded fallback is diagnostic only for
+  these unbounded obligations and fails this gate rather than counting as proof.
 
 **Breaker / bottleneck status.** The first attempt to prove `delta` against the L1 specification
 as one 4-operand adder miter exhausted the 30 s × 3 budget, fell back to per-bit COI slicing and
@@ -262,4 +323,3 @@ SRAM excluded and given separately as `sram_bits`); `adp = area × levels`;
   `run_dse_sweep.py --resume` reuses a finished `metrics.json` only when its `source_sha256` (RTL, scripts, parameters) still matches.
 * Tier 3: the bottleneck and the CEGAR finding are described in §5. No obligation in the final
   run used slicing or BMC fallback.
-
