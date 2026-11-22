@@ -10,6 +10,12 @@ Targets (small formal configurations, see rtl_to_netlist.py G4_TARGETS):
                   coherency invariants (no duplicate tags, consistent write selection,
                   response == array), hit/miss responses == post-write array under
                   simultaneous lookup + write-back, write locality
+  gs4d_deform     Q_FRAC=4 (W=12): deform_engine stage-wise bit-true to its spec --
+                  t^2 == fxmul(t, t), every coef * basis product exact, every accumulator
+                  == exact (c0 << F) + c1 t + c2 t^2 with >= 2 bits of headroom (no wrap:
+                  overflow safety), every output == saturate(round-half-up(acc >> F))
+                  (saturation safety, both rails reachable: sat witnesses), and t == 0 ->
+                  outputs == order-0 terms (Phase 3 externally supplied deltas)
   gs4d_top        NUM_PE=1, Q_FRAC=8, CACHE_WAYS=2, CACHE_SETS=4, ID_W=4: lossless skip
                   equivalence (motion_thresh == 0 -> no skip, and every datapath
                   register / output is independent of the cache contents, i.e. equal
@@ -68,6 +74,70 @@ def skip_props(nl):
             cur("motion_thresh", c) == 0, cur("skip_deform", c) == 1))]),
         ("non-vacuity witness: motion_thresh == 16 can skip", "sat", [("skip_deform", roots, lambda c: z3.And(
             cur("motion_thresh", c) == 16, cur("skip_deform", c) == 1))]),
+    ]
+
+
+# ---------------------------------------------------------------- deform engine
+DEF_F = 4
+DEF_W = 8 + DEF_F
+DEF_AW, DEF_PW, DEF_OUT = 2 * DEF_W + 2, 2 * DEF_W, ("dmu_x", "dmu_y", "ds_x", "ds_y", "dr")
+DEF_C0 = ("c0_mu_x", "c0_mu_y", "c0_s_x", "c0_s_y", None)
+FX_MAX, FX_MIN = (1 << (DEF_W - 1)) - 1, 1 << (DEF_W - 1)
+
+
+def round_sat_spec(x, frac, width):
+    """saturate_width((x + 2^(frac-1)) >>> frac) in exact (x.size() + 2)-bit arithmetic."""
+    wide = z3.SignExt(2, x)
+    q = (wide + BV(1 << (frac - 1), wide.size())) >> frac
+    lo, hi = -(1 << (width - 1)), (1 << (width - 1)) - 1
+    return z3.If(q > hi, BV(FX_MAX, width), z3.If(q < lo, BV(FX_MIN, width), z3.Extract(width - 1, 0, q)))
+
+
+def deform_props(nl):
+    cur = lambda n, c: nl.bv(nl.nets(n), c)
+    sl = lambda v, i, w: z3.Extract((i + 1) * w - 1, i * w, v)
+    coef = lambda o, k, c: sl(cur("coef", c), 2 * o + k, DEF_W)
+    basis = lambda k, c: cur("t", c) if k == 0 else cur("basis_t2", c)
+    prod = lambda o, k, c: sl(cur("prod", c), 2 * o + k, DEF_PW)
+    acc = lambda o, c: sl(cur("acc", c), o, DEF_AW)
+    c0 = lambda o, c: cur(DEF_C0[o], c) if DEF_C0[o] else BV(0, DEF_W)
+    acc_nets = lambda o: nl.nets("acc")[o * DEF_AW:(o + 1) * DEF_AW]
+    t2_spec = lambda c: round_sat_spec(z3.SignExt(DEF_W, cur("t", c)) * z3.SignExt(DEF_W, cur("t", c)),
+                                        DEF_F, DEF_W)
+
+    def exact_acc(o, c):  # (c0 << F) + c1 t + c2 t^2 in AW + 4 bits, never wraps
+        ext = DEF_AW + 4
+        return (z3.SignExt(ext - DEF_W, c0(o, c)) << DEF_F) + sum(
+            z3.SignExt(ext - DEF_W, coef(o, k, c)) * z3.SignExt(ext - DEF_W, basis(k, c)) for k in range(2))
+
+    def acc_of_prods(o, c):  # the netlist's own products, summed in AW + 4 bits
+        ext = DEF_AW + 4
+        return (z3.SignExt(ext - DEF_W, c0(o, c)) << DEF_F) + sum(
+            z3.SignExt(ext - DEF_PW, prod(o, k, c)) for k in range(2))
+
+    outs = range(len(DEF_OUT))
+    return [
+        ("basis_t2 == fxmul(t, t) (bit-true)", "unsat",
+         [("basis_t2", nl.nets("basis_t2"), lambda c: cur("basis_t2", c) != t2_spec(c))]),
+        ("acc[o] == (c0 << F) + prod[o][0] + prod[o][1] exactly (accumulator adders never wrap)", "unsat",
+         [(f"acc[{o}]", acc_nets(o), (lambda o: lambda c: z3.SignExt(4, acc(o, c)) != acc_of_prods(o, c))(o))
+          for o in outs]),
+        ("acc[o] headroom: top 2 bits are sign copies (|acc| < 2^(AW-2), fits 2W+1 bits)", "unsat",
+         [(f"acc[{o}]", acc_nets(o), (lambda o: lambda c: z3.Not(z3.Or(
+             z3.Extract(DEF_AW - 1, DEF_AW - 2, acc(o, c)) == 0, z3.Extract(DEF_AW - 1, DEF_AW - 2, acc(o, c)) == 3)))(o))
+          for o in outs]),
+        ("out[o] == saturate(round_half_up(acc[o] >>> F)) (saturation safety)", "unsat",
+         [(name, nl.nets(name), (lambda o, name: lambda c: cur(name, c) != round_sat_spec(acc(o, c), DEF_F, DEF_W))(o, name))
+          for o, name in zip(outs, DEF_OUT)]),
+        ("t == 0 -> outputs == order-0 terms (Phase 3 deltas pass through)", "unsat",
+         [(name, nl.nets(name), (lambda o, name: lambda c: z3.And(cur("t", c) == 0, cur(name, c) != c0(o, c)))(o, name))
+          for o, name in zip(outs, DEF_OUT)]),
+        ("witness: positive saturation reachable (dmu_x == FX_MAX, exact > FX_MAX)", "sat",
+         [("dmu_x", nl.nets("dmu_x"), lambda c: z3.And(cur("dmu_x", c) == FX_MAX,
+                                                         exact_acc(0, c) > (FX_MAX + 1) << DEF_F))]),
+        ("witness: negative saturation reachable (dr == FX_MIN, exact < FX_MIN)", "sat",
+         [("dr", nl.nets("dr"), lambda c: z3.And(cur("dr", c) == FX_MIN,
+                                                   exact_acc(4, c) < -((FX_MAX + 2) << DEF_F)))]),
     ]
 
 
@@ -315,7 +385,8 @@ def top_bmc(nl, breaker):
                 seconds=round(time.monotonic() - start, 2), cones=1, expect="unsat")
 
 
-PROPS = {"gs4d_skip_unit": skip_props, "gs4d_cache": cache_props, "gs4d_top": top_props}
+PROPS = {"gs4d_skip_unit": skip_props, "gs4d_cache": cache_props, "gs4d_deform": deform_props,
+         "gs4d_top": top_props}
 
 
 def main():

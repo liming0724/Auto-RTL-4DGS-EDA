@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <vector>
 #include <string>
 
 #include "4dgs_ref.hpp"
@@ -71,6 +72,51 @@ uint64_t bits(const uint32_t (&words)[N], int lsb) {  // wide out_alpha
   return v;
 }
 
+template <class T>
+void set_coef(T& words, const gs4d_ref::GaussIn& g) {  // in_coef: uint32_t[N] (Verilator 4) or VlWide (5)
+  constexpr int kWords = (10 * W + 31) / 32;
+  for (int i = 0; i < kWords; ++i) words[i] = 0;
+  for (int i = 0; i < 10; ++i)
+    for (int b = 0; b < W; ++b)
+      words[(i * W + b) / 32] |= static_cast<uint32_t>((g.coef[i] >> b) & 1) << ((i * W + b) % 32);
+}
+
+// Deformation-engine vectors: constrained-random t in [0, 1] with small coefficients,
+// plus directed extremes (t = 0, 1, FX_MAX, FX_MIN; coefficients at FX_MAX / FX_MIN)
+// that drive the accumulator into both saturation rails.
+std::vector<gs4d_ref::GaussIn> deform_vectors(uint64_t seed, int count) {
+  const int64_t one = int64_t{1} << Q_FRAC, fmax = (int64_t{1} << (W - 1)) - 1, fmin = -fmax - 1;
+  const int64_t ts[] = {0, one, fmax, fmin, one / 2, 1};
+  const int64_t cs[] = {0, fmax, fmin, one, -one, 1, -1};
+  std::vector<gs4d_ref::GaussIn> out;
+  auto base = [&](gs4d_ref::GaussIn& g) {
+    g.id = static_cast<uint32_t>(lcg(seed) % (1u << gs4d_ref::kIdW));
+    g.mu0_x = (8 + lcg(seed) % 48) * one; g.mu0_y = (8 + lcg(seed) % 48) * one;
+    g.s0_x = one / 2 + lcg(seed) % one; g.s0_y = one / 2 + lcg(seed) % one;
+    g.rho = static_cast<int64_t>(lcg(seed) % (one / 2)) - one / 4;
+    g.opacity = one / 4 + lcg(seed) % (one / 2);
+    g.dmu_x = static_cast<int64_t>(lcg(seed) % (4 * one)) - 2 * one;
+    g.dmu_y = static_cast<int64_t>(lcg(seed) % (4 * one)) - 2 * one;
+    g.pix_x0 = g.mu0_x - one; g.pix_y = g.mu0_y;
+  };
+  for (int i = 0; i < count; ++i) {
+    gs4d_ref::GaussIn g;
+    base(g);
+    if (i % 4 == 3) {
+      g.t = ts[lcg(seed) % 6];
+      for (auto& c : g.coef) c = cs[lcg(seed) % 7];
+    } else {
+      g.t = lcg(seed) % (one + 1);
+      for (int k = 0; k < 10; ++k) {
+        const int64_t span = k < 4 ? 8 * one : k < 8 ? one / 4 : one / 8;
+        g.coef[k] = static_cast<int64_t>(lcg(seed) % (2 * span + 1)) - span;
+      }
+    }
+    out.push_back(g);
+  }
+  return out;
+}
+
 struct Snap {
   uint64_t id, skipped, delta, mx, my, ca, cb, cc, op;
   int64_t alpha[gs4d_ref::kTile];
@@ -118,6 +164,13 @@ int main(int argc, char** argv) {
       noskip_cycles[t] += 3 + cfg.raster_cycles() + cfg.projection_cycles();
       frame_skips[t] += o.skipped;
     }
+  }
+  for (const auto& g : deform_vectors(seed ^ 0xdef0, 800)) {
+    const auto o = model.step(g, &st);
+    stim.push_back(g); expect.push_back(o); frame_of.push_back(gs4d_ref::kFrames-1);
+    model_cycles[gs4d_ref::kFrames-1] += o.cycles;
+    noskip_cycles[gs4d_ref::kFrames-1] += 3 + cfg.raster_cycles() + cfg.projection_cycles();
+    frame_skips[gs4d_ref::kFrames-1] += o.skipped;
   }
   for (auto g : gs4d_ref::conic_edges(Q_FRAC)) {
     g.dmu_x = int64_t{1} << Q_FRAC;
@@ -176,6 +229,7 @@ int main(int argc, char** argv) {
       top.in_ds_x = g.ds_x & kMask;   top.in_ds_y = g.ds_y & kMask;
       top.in_rho = g.rho & kMask;     top.in_opacity = g.opacity & kMask;
       top.in_pix_x0 = g.pix_x0 & kMask; top.in_pix_y = g.pix_y & kMask;
+      top.in_t = g.t & kMask;           set_coef(top.in_coef, g);
       top.eval();
     }
 
@@ -201,7 +255,15 @@ int main(int argc, char** argv) {
       const Snap s = snap(top);
       if (!s.skipped) {
         gs4d_ref::Attr attr{sext(s.mx), sext(s.my), sext(s.ca), sext(s.cb), sext(s.cc), sext(s.op)};
-        conic_check.check(gs4d_ref::Fx(Q_FRAC), inputs.front(), attr);
+        // Saturation-rail deform vectors (|rho(t)| >= 1, or |s| >= 11 px so s^2 saturates
+        // Q(7,F)) are not representable covariances; they stay bit-true checked but skip
+        // the conic cross-check.
+        const gs4d_ref::Fx fx(Q_FRAC);
+        const auto d = gs4d_ref::deform(fx, inputs.front());
+        const int64_t one = int64_t{1} << Q_FRAC;
+        const int64_t sx = fx.add(d.s0_x, d.ds_x), sy = fx.add(d.s0_y, d.ds_y);
+        if (std::llabs(d.rho) < one && std::llabs(sx) < 11 * one && std::llabs(sy) < 11 * one)
+          conic_check.check(fx, d, attr);
       }
       if (outputs == total-1 && Q_FRAC == 8) {
         std::printf("directed RTL conic alpha=%lld expected=233 (not 35)\n", (long long)s.alpha[0]);

@@ -5,8 +5,10 @@
 // with Round::kHalfUp and Overflow::kSaturate, which is exactly the RTL fxmul/fx_add.
 //
 // Per Gaussian (one accelerator transaction):
+//   deform    : rtl_4dgs/deform_engine.sv polynomial basis [1, t, t^2] (see deform());
+//               the in_dmu/in_ds fields are the order-0 terms, coef = 0 is Phase 3
 //   delta     = |dmu_x| + |dmu_y| + |ds_x| + |ds_y|       (raw LSBs, L1 temporal norm)
-//   skip      = delta < MOTION_THRESH
+//   skip      = delta < MOTION_THRESH && drho(t) == 0
 //   skip&&hit : reuse cached {mean_x, mean_y, cov_a, cov_b, cov_c, opacity}
 //   otherwise : mu(t) = mu0 + dmu, s(t) = s0 + ds, invert covariance into
 //               cov_a/b/c (conic coefficients), write the cache (hit way, else first invalid
@@ -46,6 +48,11 @@ struct GaussIn {
   int64_t mu0_x = 0, mu0_y = 0, dmu_x = 0, dmu_y = 0;
   int64_t s0_x = 0, s0_y = 0, ds_x = 0, ds_y = 0;
   int64_t rho = 0, opacity = 0, pix_x0 = 0, pix_y = 0;
+  // Deformation front-end inputs: normalized time t (Q(7,F)) and basis coefficients
+  // coef[2*o + k-1] = c_k for output o (0 mu_x, 1 mu_y, 2 s_x, 3 s_y, 4 rho), k = 1, 2.
+  int64_t t = 0;
+  std::array<int64_t, 10> coef{};
+  int64_t drho = 0;  // deform_engine dr(t), set by deform(); skip requires drho == 0
 };
 
 struct Attr {
@@ -108,6 +115,29 @@ inline int64_t lane_alpha(const Fx& fx, int64_t px, int64_t py, const Attr& a) {
   const int64_t ex = k > f ? 0 : (m >> k);
   const int64_t a_raw = fx.mul(a.opacity, ex);
   return a_raw < (int64_t{1} << (f - 8)) ? 0 : a_raw;
+}
+
+// rtl_4dgs/deform_engine.sv: acc = (c0 << F) + c1*t + c2*fxmul(t, t) exact, then one
+// half-up rounding >> F and W-bit saturation. Returns g with dmu/ds replaced by the
+// generated deltas, rho by rho + drho (saturating) and the time/coefficients cleared.
+inline GaussIn deform(const Fx& fx, const GaussIn& g) {
+  const int f = fx.frac();
+  const int64_t max = (int64_t{1} << (fx.w() - 1)) - 1, min = -max - 1;
+  const int64_t t2 = fx.mul(g.t, g.t);
+  const int64_t c0[5] = {g.dmu_x, g.dmu_y, g.ds_x, g.ds_y, 0};
+  int64_t r[5];
+  for (int o = 0; o < 5; ++o) {
+    const int64_t acc = c0[o] * (int64_t{1} << f) + g.coef[2 * o] * g.t + g.coef[2 * o + 1] * t2;
+    const int64_t q = (acc + (int64_t{1} << (f - 1))) >> f;  // arithmetic shift (floor)
+    r[o] = q > max ? max : q < min ? min : q;
+  }
+  GaussIn d = g;
+  d.dmu_x = r[0]; d.dmu_y = r[1]; d.ds_x = r[2]; d.ds_y = r[3];
+  d.rho = fx.add(g.rho, r[4]);
+  d.drho = r[4];
+  d.t = 0;
+  d.coef.fill(0);
+  return d;
 }
 
 inline uint32_t temporal_delta(const GaussIn& g) {
@@ -192,6 +222,7 @@ struct Stats {
   uint64_t gaussians = 0, skip_eligible = 0, skipped = 0, recomputed = 0;
   uint64_t cache_hits = 0, cycles = 0, cycles_noskip = 0;
   uint64_t mults = 0, mults_noskip = 0, adds = 0, adds_noskip = 0;
+  uint64_t deform_mults = 0;  // deform_engine: 11 per Gaussian, never skipped
   uint64_t alpha_mismatch_vs_full = 0;  // lossy-skip error count (0 when lossless)
   int64_t max_alpha_err = 0;
 };
@@ -203,11 +234,13 @@ class Accelerator {
         valid_(c.cache_sets * c.cache_ways, false), tag_(c.cache_sets * c.cache_ways, 0),
         data_(c.cache_sets * c.cache_ways), rr_(c.cache_sets, 0) {}
 
-  GaussOut step(const GaussIn& g, Stats* st = nullptr) {
+  GaussOut step(const GaussIn& in, Stats* st = nullptr) {
+    const GaussIn g = deform(fx_, in);
     GaussOut o;
     o.id = g.id;
     o.delta = temporal_delta(g);
-    const bool skip = o.delta < cfg_.motion_thresh;
+    // The skip metric has no rho term: a Gaussian whose rho(t) moves never reuses a stale conic.
+    const bool skip = o.delta < cfg_.motion_thresh && g.drho == 0;
     const int set = static_cast<int>(g.id & ((1u << set_w_) - 1));
     const uint32_t tag = g.id >> set_w_;
     int hit_way = -1;
@@ -241,10 +274,12 @@ class Accelerator {
       st->cache_hits += hit_way >= 0;
       st->cycles += o.cycles;
       st->cycles_noskip += base + cfg_.projection_cycles();
+      st->deform_mults += 11;
       // Projection: 9 mults, 4 deform adds + det subtract + conic negation.
       const uint64_t rm = 8 * kTile, ra = 4 * kTile;
-      st->mults += rm + (o.skipped ? 0 : 9);
-      st->mults_noskip += rm + 9;
+      // deform_engine products run for every Gaussian, skipped or not.
+      st->mults += 11 + rm + (o.skipped ? 0 : 9);
+      st->mults_noskip += 11 + rm + 9;
       st->adds += ra + (o.skipped ? 0 : 6);
       st->adds_noskip += ra + 6;
       const Attr full = project(fx_, g);
