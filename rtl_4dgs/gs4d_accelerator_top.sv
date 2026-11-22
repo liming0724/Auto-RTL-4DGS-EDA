@@ -9,7 +9,9 @@
 //            Phase 3 precomputed-delta interface); temporal_skip_unit decides skip_deform
 //            on the generated deltas; capture inputs, rho(t) = rho + drho; cache lookup.
 //            The engine runs for every Gaussian (never gated by its own skip decision).
-//   LOOKUP : cache response. skip_deform && hit -> reuse cached 2D attributes -> RASTER.
+//   LOOKUP : cache response. skip_deform && dr(t) == 0 && hit -> reuse cached 2D
+//            attributes -> RASTER (no rho term in the skip metric, so a rotating
+//            Gaussian always recomputes its conic).
 //            Otherwise deform mu(t) = mu0 + dmu, s(t) = s0 + ds -> PROJ.
 //   PROJ   : six covariance/determinant products on one shared fxmul, det subtract,
 //            2*F+1 restoring divide cycles, reciprocal setup, three conic products.
@@ -212,7 +214,7 @@ module gs4d_accelerator_top #(
             case (state)
                 S_ACCEPT: if (accept) begin
                     out_id   <= in_id;
-                    skip_q   <= skip_deform;
+                    skip_q   <= skip_deform && (def_dr == '0);
                     out_delta <= skip_delta;
                     mu0x_q   <= in_mu0_x;  mu0y_q <= in_mu0_y;
                     dmux_q   <= def_dmu_x; dmuy_q <= def_dmu_y;

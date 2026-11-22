@@ -8,7 +8,7 @@
 //   deform    : rtl_4dgs/deform_engine.sv polynomial basis [1, t, t^2] (see deform());
 //               the in_dmu/in_ds fields are the order-0 terms, coef = 0 is Phase 3
 //   delta     = |dmu_x| + |dmu_y| + |ds_x| + |ds_y|       (raw LSBs, L1 temporal norm)
-//   skip      = delta < MOTION_THRESH
+//   skip      = delta < MOTION_THRESH && drho(t) == 0
 //   skip&&hit : reuse cached {mean_x, mean_y, cov_a, cov_b, cov_c, opacity}
 //   otherwise : mu(t) = mu0 + dmu, s(t) = s0 + ds, invert covariance into
 //               cov_a/b/c (conic coefficients), write the cache (hit way, else first invalid
@@ -52,6 +52,7 @@ struct GaussIn {
   // coef[2*o + k-1] = c_k for output o (0 mu_x, 1 mu_y, 2 s_x, 3 s_y, 4 rho), k = 1, 2.
   int64_t t = 0;
   std::array<int64_t, 10> coef{};
+  int64_t drho = 0;  // deform_engine dr(t), set by deform(); skip requires drho == 0
 };
 
 struct Attr {
@@ -133,6 +134,7 @@ inline GaussIn deform(const Fx& fx, const GaussIn& g) {
   GaussIn d = g;
   d.dmu_x = r[0]; d.dmu_y = r[1]; d.ds_x = r[2]; d.ds_y = r[3];
   d.rho = fx.add(g.rho, r[4]);
+  d.drho = r[4];
   d.t = 0;
   d.coef.fill(0);
   return d;
@@ -237,7 +239,8 @@ class Accelerator {
     GaussOut o;
     o.id = g.id;
     o.delta = temporal_delta(g);
-    const bool skip = o.delta < cfg_.motion_thresh;
+    // The skip metric has no rho term: a Gaussian whose rho(t) moves never reuses a stale conic.
+    const bool skip = o.delta < cfg_.motion_thresh && g.drho == 0;
     const int set = static_cast<int>(g.id & ((1u << set_w_) - 1));
     const uint32_t tag = g.id >> set_w_;
     int hit_way = -1;
