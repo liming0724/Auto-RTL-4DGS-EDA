@@ -337,7 +337,19 @@ def main():
                 checks += divider_props(nl)
             for name, expect, cones in checks:
                 res = breaker.check(nl, name, cones)
-                res.pop("witness", None)
+                witness = res.pop("witness", None)
+                if witness is not None and expect == "unsat":
+                    model, failing = witness, res["failing_cones"]
+                    path = args.out / f"{target}_counterexample_{len(results)}.txt"
+                    path.write_text(model.sexpr() + "\n", encoding="utf-8")
+                    breaker.say(f"  SAT witness: failing cones {failing}; model saved to {path}")
+                    if target == "gs4d_top":
+                        for signal in (*CONTROL, "numerator", "quotient", "remainder_q", "denominator", "degenerate"):
+                            current = nl.bv(nl.nets(signal))
+                            following = nl.bv(nl.next_nets(signal))
+                            breaker.say(f"    {signal}[{current.size()}]: "
+                                        f"{model.eval(current, model_completion=True)} -> "
+                                        f"{model.eval(following, model_completion=True)}")
                 res["expect"], res["note"] = expect, None
                 results.append(res)
             if target == "gs4d_top":

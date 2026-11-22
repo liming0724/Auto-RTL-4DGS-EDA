@@ -429,3 +429,15 @@ full recomputation. Equal raw threshold 16 also means different physical motion
 tolerances (16/256 versus 16/4096), so Q8/Q12 skip rates are not equal-quality budgets.
 The restoring divider costs `2F+1` cycles (17 versus 25), and total projection
 cost is `11+2F` (27 versus 35): Q12 adds eight cycles on every recompute.
+
+### Formal observation portability (Yosys 0.23 / Noble 0.33)
+
+Yosys 0.33 trims the public `remainder_q` alias to 12 bits even though five higher
+register bits remain live under `trial` aliases. The old proof zero-extended the
+shortened word, causing a spurious restoring-step SAT result. Formal extraction
+now preserves all four divider observation words **after hierarchy specialization**
+and rejects missing/trimmed words (17-bit numerator/quotient, 18-bit remainder/
+denominator). This changes only formal observability, not RTL or production
+synthesis, and leaves the recurrence assertion and solver guardrails unchanged.
+Unexpected SAT results also print control/divider values and save the complete
+model under the formal output directory for diagnosis.
