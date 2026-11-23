@@ -19,6 +19,7 @@
 #include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
+#include <type_traits>
 #include <cstring>
 #include <deque>
 #include <vector>
@@ -65,15 +66,16 @@ int64_t sext(uint64_t v) {
   return (v >> (W - 1)) ? static_cast<int64_t>(v) - (int64_t{1} << W) : static_cast<int64_t>(v);
 }
 
+// out_alpha: scalar up to 64 bits; wider is uint32_t[N] (Verilator 4) or VlWide (5).
 template <class T>
-uint64_t bits(const T& word, int lsb) {  // scalar out_alpha (TILE*W <= 64)
-  return (static_cast<uint64_t>(word) >> lsb) & kMask;
-}
-template <std::size_t N>
-uint64_t bits(const uint32_t (&words)[N], int lsb) {  // wide out_alpha
-  uint64_t v = 0;
-  for (int b = 0; b < W; ++b) v |= static_cast<uint64_t>((words[(lsb + b) / 32] >> ((lsb + b) % 32)) & 1u) << b;
-  return v;
+uint64_t bits(const T& word, int lsb) {
+  if constexpr (std::is_integral_v<T>) {
+    return (static_cast<uint64_t>(word) >> lsb) & kMask;
+  } else {
+    uint64_t v = 0;
+    for (int b = 0; b < W; ++b) v |= static_cast<uint64_t>((word[(lsb + b) / 32] >> ((lsb + b) % 32)) & 1u) << b;
+    return v;
+  }
 }
 
 template <class T>
