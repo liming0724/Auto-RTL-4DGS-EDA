@@ -14,6 +14,8 @@ make sim_4dgs_frame      # FP32-vs-fixed validation (Q_FRAC=12, T=0) + SSIM_v2 f
 make eval_quality_4dgs   # 18-point sweep -> build/4dgs/quality/quality_vs_skip.{csv,json,md}
 make synth_4dgs          # Tier 2: Yosys/ABC generic cells + ABC CEC
 make formal_4dgs         # Tier 3: Z3 through eda_core (includes the new gs4d_deform target)
+make stress_4dgs         # Phase 5b: benign/pan/fast stress sweep -> build/4dgs/stress/ (section 6)
+make conic_cliff_4dgs    # Phase 5b: small-determinant conic characterization -> build/4dgs/conic/ (section 7)
 ```
 
 ## 1. Deformation engine
@@ -304,3 +306,180 @@ exact `coef * t` and `coef * t2` over all 12 sweep points and the `sim_4dgs` vec
 - Under `motion_thresh == 0`, every datapath and control register is independent of cache
   contents.
 - These proofs cover the new `dr(t) == 0` skip gate, which can only remove skips.
+
+## 6. Phase 5b: stress scenes (pan, fast)
+
+Phase 5a measured skipping on the benign scene only. Phase 5b adds two scene modes to
+`golden_model/gs4d_frame.hpp` (`SceneMode`, selected with `+scene=<benign|pan|fast>` on the
+frame testbench). `benign` stays the default and draws the same PRNG sequence, so every
+earlier sweep reproduces bit for bit (`quality_vs_skip.csv`, `bandwidth_profile.csv/.md`,
+`golden_sweep.csv`, `sim_4dgs` RESULT lines: byte-identical to c0a9b14). Golden model and
+RTL get the same transaction list, and the rendering math is unchanged.
+
+| Scene | Definition | Measured median step |
+|---|---|---:|
+| benign | Phase 4/5a scene: 60% static; moving amplitude log-uniform 0.002–12 px over the sequence | 0.0139 px/frame |
+| pan | benign + uniform camera pan on **every** Gaussian along (0.8, 0.6): step ramps 2 → 4 px/frame (frame 0→1: 2 px, frame 6→7: 4 px; 21 px total). Implemented as extra `c1, c2` terms in mu(t), so the deformation engine sees it | 3.00 px/frame |
+| fast | benign split (60% static), but the moving linear term is log-uniform **1.5–8 px/frame**; curvature scales with speed, so individual frame steps span 0.82–11.2 px (91.6% inside 1.5–8; 5th–95th percentile 1.57–8.01); scale/rho drift capped at the benign maximum | 3.69 px/frame |
+
+Median step = median |mu(t<sub>k+1</sub>) − mu(t<sub>k</sub>)| over the Gaussians that move
+(`median_step_px`). The benign value is lower than the ~0.019 px/frame linear-term figure
+because it uses the full curved trajectory.
+
+**Off-frame handling: clipped, not wrapped.** Pan spawns mu0 over the frame extended by
+the 21 px pan, upstream of the pan direction, so the 64×64 frame stays covered. `bin_spans`
+clips each Gaussian's 3.5-sigma box to [0, 63]. A Gaussian whose box is fully outside the
+frame produces no spans in that frame, so it is dropped for that frame. The FP32 reference
+also ignores off-frame pixels. Golden and RTL get the same span list. This is why the
+transaction counts differ: 148,360 (benign), 115,528 (pan), 143,367 (fast).
+
+Sweep: CACHE_WAYS=4 profiler build, Q_FRAC {8, 12}. Each scene gets Baseline
+(`cache_bypass=1`, T=0), Skip-Only (`cache_bypass=1`, T=16) and Full Co-Design
+(`cache_bypass=0`) at T {0, 1, 2, 3, 4, 8, 16, 32, 64}. Fast also gets a beyond-grid probe at
+T = 0.5–8 px. 76 runs: 66 grid runs (3 scenes x 2 Q_FRAC x 11 modes) + 10 fast-scene probe
+runs (5 thresholds x 2 Q_FRAC); **0 mismatches** vs golden. CSVs (Phase 5a profiler columns, plus
+`scene`, `hit_rate`, `psnr_drop_db` and conic stats):
+[`phase5b/stress_benign.csv`](phase5b/stress_benign.csv),
+[`phase5b/stress_pan.csv`](phase5b/stress_pan.csv),
+[`phase5b/stress_fast.csv`](phase5b/stress_fast.csv).
+
+Full Co-Design, Modeled External DRAM Traffic (hit rate = `cache_served / transactions`):
+
+| Scene | Q_FRAC | T | Skip rate | Total cycles | Speedup vs scene Baseline | PSNR (dB) | HW SSIM | fetch_count | Hit rate | dram_read_bytes/frame | Reduction vs scene Baseline |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| benign | 8 | 0 | 0.0% | 5,044,240 | 1.000x | 44.73 | 0.99724 | 148,360 | 0.0% | 890,160 | 0.0% |
+| benign | 8 | 1 | 84.2% | 1,670,590 | 3.019x | 44.73 | 0.99724 | 23,410 | 84.2% | 140,460 | 84.2% |
+| benign | 8 | 16 | 90.4% | 1,421,488 | 3.549x | 44.71 | 0.99726 | 14,184 | 90.4% | 85,104 | 90.4% |
+| benign | 8 | 64 | 92.7% | 1,329,121 | 3.795x | 44.48 | 0.99724 | 10,763 | 92.7% | 64,578 | 92.7% |
+| pan | 8 | 0 | 0.0% | 3,927,952 | 1.000x | 44.08 | 0.99630 | 115,528 | 0.0% | 693,168 | 0.0% |
+| pan | 8 | 1–64 | 12.0% | 3,554,488 | 1.105x | 44.08 | 0.99630 | 101,696 | 12.0% | 610,176 | 12.0% |
+| fast | 8 | 0 | 0.0% | 4,874,478 | 1.000x | 44.55 | 0.99715 | 143,367 | 0.0% | 860,202 | 0.0% |
+| fast | 8 | 1–64 | 85.5% | 1,565,385 | 3.114x | 44.55 | 0.99715 | 20,808 | 85.5% | 124,848 | 85.5% |
+| benign | 12 | 1 | 82.6% | 1,941,555 | 3.209x | 47.74 | 0.99748 | 25,801 | 82.6% | 190,282 | 82.6% |
+| benign | 12 | 64 | 86.8% | 1,725,780 | 3.611x | 47.74 | 0.99749 | 19,636 | 86.8% | 144,816 | 86.8% |
+| pan | 12 | 1–64 | 12.0% | 4,368,056 | 1.111x | 46.91 | 0.99714 | 101,696 | 12.0% | 750,008 | 12.0% |
+| fast | 12 | 1–64 | 85.5% | 1,731,849 | 3.477x | 47.60 | 0.99750 | 20,808 | 85.5% | 153,459 | 85.5% |
+
+The pan and fast rows are identical for every T from 1 to 64. In every scene, Baseline and
+Skip-Only equal Full Co-Design T=0, as in Phase 5a. All rows are in the CSVs.
+
+### Pan: cache thrashing
+
+- **The pan defeats the cache.** The skip metric is the deformation offset from the
+  canonical pose (|dmu| + |ds|, LSB), not the frame-to-frame motion. A pan gives every
+  Gaussian, static ones included, an offset of at least 2 px from frame 1 onward.
+  That is ≥ 512 LSB at Q8, far above T=64. Only frame 0 (t=0, offset 0) is reused.
+- **Thrashing vs benign at the same T.** At T=1, Q8: hit rate **12.0% vs 84.2%**, and
+  fetch_count 101,696 vs 23,410 (4.3x, on 22% fewer transactions). At T=16 the
+  comparison is 12.0% vs 90.4%, and fetch_count 101,696 vs 14,184 (7.2x).
+- **Traffic stays near the no-cache Baseline at every threshold.** Pan Full Co-Design
+  reads 610,176 B/frame (Q8) and 750,008 B/frame (Q12) at T=1 through T=64. That is
+  **88.0% of the pan Baseline** at every T. Raising T does not help, because the 2–4
+  px/frame offsets sit far above the grid. The benign scene's 84–93% reduction becomes
+  12%, and the speedup drops from 3.0–3.8x to 1.1x. Under a global pan the accelerator is
+  bandwidth-bound again (see
+  [SYSTEM_BANDWIDTH_4DGS.md](SYSTEM_BANDWIDTH_4DGS.md#phase-5b-stress-scenes-and-miss-penalty-latency)).
+- PSNR and HW SSIM are identical at every T: the misses are recomputed, never reused.
+
+### Fast: ghosting boundary
+
+- **No PSNR cliff in the grid at either Q_FRAC.** The largest drop vs the scene's T=0 is
+  **0.00 dB** at Q8 and at Q12 (T up to 64). The fast scene's skip rate (85.5%) comes
+  entirely from static Gaussians and frame 0. No fast mover is ever served from cache.
+- **Why: two gates keep fast movers out.**
+  - (1) Their offset is ≥ 1.5 px after one frame: ≥ 384 LSB at Q8 and ≥ 6,144 LSB at
+    Q12, far above T=64.
+  - (2) The skip rule also needs `drho == 0`. Fast movers have nonzero rho drift.
+    Counting quantized (Gaussian, frame ≥ 1) pairs of moving Gaussians, `drho == 0`
+    holds for 6 of 714 at Q8 and 0 of 714 at Q12. Benign: 464 and 226.
+- **Beyond-grid probe** (T = 0.5, 1, 2, 4, 8 px of L1 offset, i.e. 128–2,048 LSB at Q8 and
+  2,048–32,768 LSB at Q12):
+  - Q12: still **no cliff**; PSNR is unchanged up to 8 px.
+  - Q8: the first loss appears at T = 8 px (2,048 LSB): **−0.08 dB**, with 10 fewer
+    fetches. Those are the 6 `drho == 0` movers.
+- **Ghosting boundary per Q_FRAC: none below 8 px (Q8) and none up to 8 px (Q12).** The
+  `drho == 0` guard, not the threshold, is what prevents ghosting on fast motion. The
+  benign scene is still the only one in which T trades quality: Q8 −0.25 dB at T=64.
+
+## 7. Phase 5b: small-determinant conic characterization
+
+The existing `ConicCheck` covers s ∈ [0.3, 1.0] and rho ∈ [−0.4, 0.4], and leaves its
+pass criteria unchanged. Phase 5b adds a characterization grid (`gs4d_ref::small_det_grid`
++ `probe_conic`, run through `sim_main_4dgs +smalldet=<csv>`):
+
+- Grid: sx, sy ∈ {0.10, 0.12, …, 0.30} ∪ {0.35, …, 1.00} and rho ∈ {−0.90, −0.85, …, 0.90}.
+  That is 23,125 points per Q_FRAC.
+- Every point is streamed through the default-config RTL and checked bit-true against
+  golden: **0 mismatches** at Q8 and at Q12.
+- Each point is compared against the exact double `conic_from_scale`. The grid points are
+  kept out of `ConicCheck`, so they never gate PASS. `ConicCheck` itself still reports
+  `failures=0`, with the same `inv_saturated` count as before.
+
+Metrics:
+
+- rel err = max<sub>i</sub>|conic<sub>i</sub> − ref<sub>i</sub>| / max<sub>j</sub>|ref<sub>j</sub>|.
+- flicker = the largest change in that normalized conic after ±1 LSB on sx, sy or rho.
+- "flicker exact" applies the same input step to the exact conic. It is the part of the
+  flicker the input LSB itself causes.
+
+Data: [`phase5b/small_det_cliff_summary.csv`](phase5b/small_det_cliff_summary.csv), per
+(Q_FRAC, min(sx, sy), |rho|). The full per-point grid is
+`build/4dgs/conic/small_det_cliff.csv`.
+
+| Q_FRAC | Points | inv_saturated | Saturation boundary | Smallest unsaturated det | Max rel err (unsaturated) | Points > 10% | Worst flicker (unsaturated) | Worst flicker, exact |
+|---:|---:|---:|---|---:|---:|---:|---:|---:|
+| 8 | 23,125 | 9,833 | det ≤ **2 LSB** (2<sup>2F</sup>/det > FX_MAX) | 3 LSB | **36.6%** | 10,965 | **52.6%** | 8.2% |
+| 12 | 23,125 | 9,172 | det ≤ **32 LSB** | 33 LSB | 2.9% | 8,670 | 3.1% | 0.5% |
+
+- **Cliff location.**
+  - Q8: error passes 10% **before** saturation. Unsaturated points with det of 3–10 LSB
+    reach 36.6% error and 52.6% flicker. Example: s = 0.5, rho = 0.8, det = 6 LSB gives
+    4.3% error but 20.9% flicker.
+  - Q12: the cliff **is** the saturation boundary. All unsaturated points stay ≤ 2.9%
+    error and ≤ 3.1% flicker. Every point over 10% is a saturated reciprocal.
+- **Determinant envelope** (every grid point at or above it keeps < 10% error and no
+  saturation; det = sx² sy² (1 − rho²)):
+  - Q8: det ≥ **0.0416 px⁴** (√det ≥ 0.204 px²).
+  - Q12: det ≥ **0.0079 px⁴** (√det ≥ 0.089 px²).
+
+Operating envelope: the smallest min(sx, sy) such that every grid point at or above it has
+< 10% error and no saturation. The table also gives the worst error and flicker inside
+that region.
+
+| abs(rho) | Q8 min(sx, sy) | Q8 max err | Q8 max flicker | Q12 min(sx, sy) | Q12 max err | Q12 max flicker |
+|---:|---:|---:|---:|---:|---:|---:|
+| 0.0 | 0.35 | 8.2% | 15.5% | 0.30 | 0.8% | 1.6% |
+| 0.4 | 0.40 | 8.8% | 18.3% | 0.35 | 0.7% | 2.0% |
+| 0.5 | 0.35 | 9.6% | 24.4% | 0.35 | 1.8% | 2.1% |
+| 0.6 | 0.45 | 4.3% | 16.0% | 0.35 | 1.6% | 2.5% |
+| 0.7 | 0.50 | 6.5% | 9.1% | 0.40 | 1.1% | 1.5% |
+| 0.8 | 0.45 | 7.3% | 31.4% | 0.40 | 1.0% | 2.1% |
+| 0.9 | 0.55 | 9.8% | 22.8% | 0.50 | 1.4% | 2.2% |
+
+The Q8 boundary is not monotonic in |rho|, because sx, sy and rho are quantized to 1/256.
+All 19 |rho| rows are generated by `make conic_cliff_4dgs`.
+
+**Does the scene reach the cliff? No.** The frame testbench probes every in-frame
+(Gaussian, frame) pair of each scene with the same `probe_conic` (SCENE line):
+
+| Scene (Q8) | min s (px) | max abs(rho) | min det (LSB) | inv_saturated | > 10% pairs with min(s) < 1 px |
+|---|---:|---:|---:|---:|---:|
+| benign | 0.766 | 0.441 | 155 | 0 | 0 |
+| pan | 0.777 | 0.441 | 155 | 0 | 0 |
+| fast | 0.629 | 0.617 | 86 | 0 | 0 |
+
+- Even the fast scene's deform-pushed |rho| = 0.62 with s = 0.63 sits inside the Q8
+  envelope: min(s) 0.45–0.50 for |rho| 0.6–0.7.
+- Its smallest det (86 LSB) is ~40x the Q8 saturation boundary.
+- The ~±0.7 rho named in the task is not reached by these generators. At |rho| = 0.7 the
+  envelope is s ≥ 0.50 (Q8) or ≥ 0.40 (Q12).
+- The scene's worst relative error, 18.1% at Q8, does not come from the small-det cliff.
+  It occurs at s ≈ 3.3 px, where the whole conic is only ~24 LSB at Q8 and 1 LSB is ~4%.
+  It is a resolution limit for large Gaussians, inside the existing ConicCheck tolerance.
+
+**Recommendation.**
+- Q12 is safe down to the saturation boundary.
+- Q8 needs min(sx, sy) ≥ 0.5 px for |rho| ≤ 0.9, or the det envelope above. Below that,
+  1-LSB input changes can move the conic by up to ~50%, which shows as frame-to-frame
+  flicker.
+- Neither stress scene nor the benign scene goes below this envelope.

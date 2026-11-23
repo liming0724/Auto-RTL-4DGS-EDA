@@ -25,7 +25,7 @@ VERILATOR_BUILD := --cc --exe --build -O2
 FORMAL_TOOLS = --yosys "$(YOSYS)" --sv2v "$(SV2V)" --abc "$(ABC)"
 
 .PHONY: lint lint_ssim lint_gs sim sim_ssim sim_gs synth_baseline cec_baseline build_eda formal_netlists formal_z3 test_cegar \
-	sim_4dgs synth_4dgs formal_4dgs dse_4dgs sim_4dgs_frame eval_quality_4dgs profile_bw_4dgs
+	sim_4dgs synth_4dgs formal_4dgs dse_4dgs sim_4dgs_frame eval_quality_4dgs profile_bw_4dgs stress_4dgs conic_cliff_4dgs
 lint: lint_ssim lint_gs
 
 lint_ssim:
@@ -110,3 +110,12 @@ eval_quality_4dgs:
 # {Baseline, Skip-Only, Full Co-Design T=1/3/16} -> build/4dgs/bandwidth/bandwidth_profile.{csv,json,md}.
 profile_bw_4dgs:
 	$(PYTHON) scripts/dse/quality_sweep.py profile --verilator "$(VERILATOR)" --jobs $(DSE_JOBS)
+
+# Phase 5b: stress scenes (benign / pan / fast) x Q_FRAC {8,12} on the profiler build, with
+# miss-penalty Pareto tables (effective cycles, no-overlap bound) -> build/4dgs/stress/.
+stress_4dgs:
+	$(PYTHON) scripts/dse/quality_sweep.py stress --verilator "$(VERILATOR)" --jobs $(DSE_JOBS)
+
+# Phase 5b: small-determinant conic characterization through the RTL -> build/4dgs/conic/.
+conic_cliff_4dgs:
+	$(PYTHON) scripts/dse/quality_sweep.py conic --verilator "$(VERILATOR)" --jobs $(DSE_JOBS)
