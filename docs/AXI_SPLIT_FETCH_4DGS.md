@@ -161,8 +161,8 @@ checks `pre.blif` against the mapped and the optimized netlists.
 
 | Design | Generic gates | Flip-flops | AIG ANDs | AIG levels | CEC |
 |---|---|---|---|---|---|
-| `gs4d_accelerator_top` (bare) | 98 643 | 3 997 | 118 508 | 425 | running |
-| `gs4d_axi_wrapper` (wrapper + top) | 98 334 | 4 334 | 117 611 | 420 | running |
+| `gs4d_accelerator_top` (bare) | 98 643 | 3 997 | 118 508 | 425 | PASS / PASS |
+| `gs4d_axi_wrapper` (wrapper + top) | 98 334 | 4 334 | 117 611 | 420 | PASS / PASS |
 | Overhead | -309 (-0.31 %) | +337 | -897 | -5 | |
 
 * **Negative gate overhead.** The +337 flip-flops are mostly `meta_q`, plus `dr_q`, `axi_err`
@@ -171,7 +171,10 @@ checks `pre.blif` against the mapped and the optimized netlists.
   and the generic-cell mapping effects of that smaller cone.
 * **CEC runtime.** At this configuration CEC takes more than the 7 200 s limit of the
   `gs4d_flow` run per design. The ABC mapping takes about 35 min. CEC was therefore rerun
-  without a limit. Those reruns are still in progress; the result will be added here.
+  with ABC `&cec`, on the same `pre.blif`, `mapped.blif` and `optimized.blif`
+  converted to AIGER (`read; strash; write_aiger`, then `&r pre.aig; &cec <other>.aig`).
+  Both comparisons report "Networks are equivalent" for both designs: 29 min and 104 min for
+  the bare top, 102 min and 158 min for the wrapper.
 
 **CI configuration: NUM_PE=1, CACHE_WAYS=2, Q_FRAC=8.**
 
