@@ -25,7 +25,7 @@ VERILATOR_BUILD := --cc --exe --build -O2
 FORMAL_TOOLS = --yosys "$(YOSYS)" --sv2v "$(SV2V)" --abc "$(ABC)"
 
 .PHONY: lint lint_ssim lint_gs sim sim_ssim sim_gs synth_baseline cec_baseline build_eda formal_netlists formal_z3 test_cegar \
-	sim_4dgs synth_4dgs formal_4dgs dse_4dgs sim_4dgs_frame eval_quality_4dgs
+	sim_4dgs synth_4dgs formal_4dgs dse_4dgs sim_4dgs_frame eval_quality_4dgs profile_bw_4dgs
 lint: lint_ssim lint_gs
 
 lint_ssim:
@@ -102,6 +102,11 @@ dse_4dgs: $(G4_BUILD)/4dgs_ref
 sim_4dgs_frame:
 	$(PYTHON) scripts/dse/quality_sweep.py frame --verilator "$(VERILATOR)" --jobs $(DSE_JOBS)
 
-# Phase 4: quality-vs-skip sweep, Q_FRAC {8,12} x MOTION_THRESH {0,4,8,16,32,64}.
+# Phase 4/5a: quality-vs-skip sweep, Q_FRAC {8,12} x MOTION_THRESH {0,1,2,3,4,8,16,32,64}.
 eval_quality_4dgs:
 	$(PYTHON) scripts/dse/quality_sweep.py sweep --verilator "$(VERILATOR)" --jobs $(DSE_JOBS)
+
+# Phase 5a: bandwidth profiler (Modeled External DRAM Traffic), Q_FRAC {8,12} x
+# {Baseline, Skip-Only, Full Co-Design T=1/3/16} -> build/4dgs/bandwidth/bandwidth_profile.{csv,json,md}.
+profile_bw_4dgs:
+	$(PYTHON) scripts/dse/quality_sweep.py profile --verilator "$(VERILATOR)" --jobs $(DSE_JOBS)

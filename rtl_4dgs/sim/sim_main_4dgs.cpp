@@ -191,6 +191,7 @@ int main(int argc, char** argv) {
 
   Vgs4d_accelerator_top top;
   top.motion_thresh = thresh;
+  top.cache_bypass = 0;
   top.clk = 0;
   top.rst_n = 0;
   top.in_valid = 0;

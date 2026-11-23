@@ -22,6 +22,11 @@ Targets (small formal configurations, see rtl_to_netlist.py G4_TARGETS):
                   to full evaluation), backpressure freeze (no state, output or cache
                   change while out_ready == 0), legal FSM, ranking function (no
                   deadlock through PROJ/DIV/INV), BMC-20 safety from reset.
+                  The cache_bypass input is a free variable in every obligation, so the
+                  lossless/backpressure/FSM proofs hold for both values (in particular
+                  for bypass == 0); the non-vacuity witness is pinned to bypass == 0, and
+                  two bypass obligations prove cache_bypass == 1 is a forced miss (every
+                  LOOKUP recomputes, nothing depends on cache contents).
                   Full recompute latency exceeds 20: liveness is proved by the
                   unbounded inductive control invariant and decreasing rank, not BMC.
 """
@@ -265,12 +270,13 @@ def top_props(nl):
         if not q.startswith("u_cache_"):
             groups.setdefault(re.sub(r"__\d+__$", "", q), []).append(q)
     lossless = lambda c: z3.And(cur("motion_thresh", c) == 0, cur("skip_q", c) == 0, cur("out_skipped", c) == 0)
+    bypass = lambda c: cur("cache_bypass", c) == 1
 
-    def noninterference(name):
+    def noninterference(name, assume=lossless):
         d = [nl.regs[q]["d"] for q in sorted(groups[name])]
         def viol(c):
             e = nl.bv(d, c)
-            return z3.And(lossless(c), e != z3.substitute(e, *alt))
+            return z3.And(assume(c), e != z3.substitute(e, *alt))
         return (f"{name}_next", d, viol)
 
     out_regs = [n for n in ("out_id", "out_skipped", "out_delta", "out_mean_x", "out_mean_y", "out_cov_a",
@@ -315,10 +321,16 @@ def top_props(nl):
         ("handshakes: in_ready iff ACCEPT, out_valid iff OUT", "unsat", [(
             "ready/valid", nl.nets("in_ready") + nl.nets("out_valid"), lambda c: z3.Or(
                 cur("in_ready", c) != b1(state(c) == S_ACCEPT), cur("out_valid", c) != b1(state(c) == S_OUT)))]),
-        ("non-vacuity witness: with motion_thresh != 0 the result does depend on cache contents", "sat", [
+        ("non-vacuity witness: with motion_thresh != 0 and cache_bypass == 0 the result does depend on cache contents", "sat", [
             ("datapath_next", [nl.regs[q]["d"] for g in groups.values() for q in g], lambda c: z3.And(
-                cur("motion_thresh", c) != 0, z3.Or(*[(lambda e: e != z3.substitute(e, *alt))(
+                cur("motion_thresh", c) != 0, cur("cache_bypass", c) == 0, z3.Or(*[(lambda e: e != z3.substitute(e, *alt))(
                     nl.bv([nl.regs[q]["d"] for q in sorted(g)], c)) for g in groups.values()])))]),
+        ("bypass: cache_bypass == 1 -> every LOOKUP enters full recompute at PROJ phase 0, out_skipped == 0",
+         "unsat", [("bypass_recompute", state_d + nl.next_nets("phase") + nl.next_nets("out_skipped"),
+             lambda c: z3.And(bypass(c), state(c) == S_LOOKUP, z3.Or(
+                 nxt("state", c) != S_PROJ, nxt("phase", c) != 0, nxt("out_skipped", c) != 0)))]),
+        ("bypass: under cache_bypass == 1 every datapath/control register is independent of cache contents "
+         "(forced miss, any motion_thresh)", "unsat", [noninterference(n, bypass) for n in sorted(groups)]),
         ("unbounded progress: positive rank in LOOKUP/PROJ/DIV/INV/RASTER strictly decreases", "unsat", [(
             "rank", control_roots, lambda c: z3.And(control_inv(cur, c), busy(c), z3.Or(
                 progress_rank(cur, c) == 0, z3.UGT(progress_rank(cur, c), 32),
