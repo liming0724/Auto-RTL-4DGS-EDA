@@ -274,6 +274,30 @@ helpers, testbenches and reporting scripts.
 | 2 Yosys + ABC | `synth_4dgs`, default config | **50,910 generic gates**, 2,275 FFs, 61,125 AIG ANDs, 336 levels; **CEC PASS** |
 | 3 Z3 | `make formal_4dgs` (30 s timeout, COI slicing, BMC-20) | **45/45 as expected** |
 
+## Phase 5c: MEASURED vs MODELED (split-fetch AXI wrapper)
+
+All numbers in the sections above are **MODELED** (counters x fixed byte sizes).
+
+* **Phase 5c measurement.** `rtl_4dgs/gs4d_axi_wrapper.sv` splits the input into a metadata
+  beat (Channel A, 36 / 44 B at Q8 / Q12), fetched for every Gaussian, and an attribute beat
+  (Channel B, 12 / 15 B), fetched only for recompute misses. Phase 5c counts the AXI
+  handshakes in the cycle-accurate wrapper simulation.
+* **Agreement.** The **MEASURED** bytes equal the **MODELED** split-fetch prediction
+  `B_meta + (1 - skip_rate) * B_attr` exactly in every run.
+* **MEASURED reductions vs the 48 / 59 B baseline.**
+
+  | Case | MEASURED reduction |
+  |---|---|
+  | benign | 21.1 % (Q8 T=1), 21.7 % (Q8 T=3), 22.6 % (Q8 T=16) |
+  | benign | 21.0 % (Q12 T=1), 21.7 % (Q12 T=16) |
+  | fast | 21.4 % (Q8 T=1) |
+  | pan (adversarial) | 3.0 % (Q8 T=1) |
+
+* **The -90.4 % headline is not realized by split fetch.** It remains the **MODELED
+  zero-cost skip-decision** figure, which charges a served Gaussian no input bytes. Split
+  fetch still pays the metadata beat, which carries every input of the skip decision.
+* **Details.** See [AXI_SPLIT_FETCH_4DGS.md](AXI_SPLIT_FETCH_4DGS.md).
+
 ## Verification (three-tier funnel)
 
 | Tier | Check | Result |

@@ -66,29 +66,29 @@ def sim(cfg, thresh, binary, out):
     return res
 
 
-def source_digest(cfg, tools):
+def source_digest(cfg, tools, rtl_files=RTL_FILES):
     """Identity of every input that determines a configuration's synthesis metrics."""
     h = hashlib.sha256(json.dumps([cfg, bool(getattr(tools, "fast_abc", False))], sort_keys=True).encode())
-    for f in [*RTL_FILES, RTL / "gs4d_fx.svh", ROOT / "scripts/dse/gs4d_sram_interfaces.v", Path(__file__),
+    for f in [*rtl_files, RTL / "gs4d_fx.svh", ROOT / "scripts/dse/gs4d_sram_interfaces.v", Path(__file__),
               ROOT / "scripts/synth/aig.abc", ROOT / "scripts/synth/cec.abc", ROOT / "scripts/synth/baseline.py"]:
         h.update(f.read_bytes())
     return h.hexdigest()
 
 
-def synth(cfg, out, tools):
+def synth(cfg, out, tools, top=TOP, rtl_files=RTL_FILES):
     out.mkdir(parents=True, exist_ok=True)
     for name in ("metrics.json", "optimized.blif", "cec.log"):
         (out / name).unlink(missing_ok=True)
     converted = out / "gs4d_converted.v"
-    rtl = [str(f) for f in RTL_FILES if f.stem != "SRAM_gs4d_cache"]
+    rtl = [str(f) for f in rtl_files if f.stem != "SRAM_gs4d_cache"]
     run([tools.sv2v, f"-I{RTL}", "-w", str(converted), *rtl], ROOT, out / "sv2v.log")
-    params = [f"chparam -set {k.upper()} {v} {TOP}" for k, v in cfg.items()]
+    params = [f"chparam -set {k.upper()} {v} {top}" for k, v in cfg.items()]
     q = json.dumps
     script = out / "synth.ys"
     script.write_text("\n".join([
         f"read_verilog -lib {q(str(ROOT / 'scripts/dse/gs4d_sram_interfaces.v'))}",
         f"read_verilog {q(str(converted))}", *params,
-        f"synth -top {TOP} -flatten -noabc", f"rename -top {TOP}", "setundef -zero", "check -assert",
+        f"synth -top {top} -flatten -noabc", f"rename -top {top}", "setundef -zero", "check -assert",
         f"write_json {q(str(out / 'pre.json'))}",
         f"abc -exe {q(tools.abc)}{' -fast' if getattr(tools, 'fast_abc', False) else ''} -g AND,OR,XOR,MUX",
         "check -assert", "stat",
@@ -99,7 +99,7 @@ def synth(cfg, out, tools):
         raise ValueError(f"macro pin width mismatch; see {out / 'synth.log'}")
     stats, manifests = {}, []
     for name in ("pre", "mapped"):
-        manifest, stats[name] = cut_blif(out / f"{name}.json", out / f"{name}.blif", TOP, mapped=name == "mapped")
+        manifest, stats[name] = cut_blif(out / f"{name}.json", out / f"{name}.blif", top, mapped=name == "mapped")
         manifests.append(manifest)
     if manifests[0] != manifests[1]:
         raise ValueError(f"{tag(cfg)}: mapping changed an opaque cell or state boundary")
@@ -114,7 +114,7 @@ def synth(cfg, out, tools):
     w = 8 + cfg["q_frac"]
     tag_w = 12 - (cfg["cache_sets"] - 1).bit_length()
     stats["sram_bits"] = cfg["cache_ways"] * cfg["cache_sets"] * (tag_w + 6 * w)
-    stats["source_sha256"] = source_digest(cfg, tools)
+    stats["source_sha256"] = source_digest(cfg, tools, rtl_files)
     (out / "metrics.json").write_text(json.dumps(stats, indent=2) + "\n", encoding="utf-8")
     if stats["cec"] != "PASS":
         raise ValueError(f"{tag(cfg)}: CEC failed or inconclusive; see {out / 'cec.log'}")

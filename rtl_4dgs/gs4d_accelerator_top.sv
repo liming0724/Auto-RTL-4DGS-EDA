@@ -28,6 +28,12 @@
 // every Gaussian takes the full recompute path from its streamed parameters. Fills are
 // not suppressed: the cache keeps its normal lookup/fill/replacement sequence and stays
 // warm, and the bypass only masks the hit at the top (motion_aware_cache is unchanged).
+// SPLIT_FETCH (Phase 5c, gs4d_axi_wrapper): 0 = legacy (attr_valid/attr_data ignored,
+// needs_attr tied 0). 1 = the base attributes {mu0_x, mu0_y, s0_x, s0_y, rho, opacity}
+// arrive on attr_data after the lookup: needs_attr is 1 during LOOKUP iff the transaction
+// misses, and a miss waits in ATTR for attr_valid, latches the attr_data fields (in_mu0_*,
+// in_s0_*, in_rho, in_opacity are then don't-care) and enters PROJ phase 0 as before. A hit
+// never enters ATTR. attr_data packing (LSB first): opacity, rho, s0_y, s0_x, mu0_y, mu0_x.
 module gs4d_accelerator_top #(
     parameter int NUM_PE     = 1,
     parameter int Q_FRAC     = 8,
@@ -36,7 +42,8 @@ module gs4d_accelerator_top #(
     parameter int ID_W       = 12,
     parameter int TILE       = 4,
     parameter int W          = 8 + Q_FRAC,
-    parameter int COEF_W     = 10 * W
+    parameter int COEF_W     = 10 * W,
+    parameter int SPLIT_FETCH = 0
 ) (
     input  logic              clk,
     input  logic              rst_n,
@@ -70,7 +77,10 @@ module gs4d_accelerator_top #(
     output logic [W-1:0]      out_cov_b,
     output logic [W-1:0]      out_cov_c,
     output logic [W-1:0]      out_opacity,
-    output logic [TILE*W-1:0] out_alpha
+    output logic [TILE*W-1:0] out_alpha,
+    input  logic              attr_valid,
+    input  logic [6*W-1:0]    attr_data,
+    output logic              needs_attr
 );
     localparam int F     = Q_FRAC;
     localparam int R     = TILE / NUM_PE;
@@ -88,6 +98,7 @@ module gs4d_accelerator_top #(
     localparam logic [2:0] S_OUT    = 3'd4;
     localparam logic [2:0] S_DIV    = 3'd5;
     localparam logic [2:0] S_INV    = 3'd6;
+    localparam logic [2:0] S_ATTR   = 3'd7;
     localparam int N = 2*F+1;
     localparam int DIV_CW = $clog2(N);
 
@@ -96,7 +107,7 @@ module gs4d_accelerator_top #(
 
     // Captured transaction.
     logic [W-1:0] mu0x_q, mu0y_q, dmux_q, dmuy_q, s0x_q, s0y_q, dsx_q, dsy_q;
-    logic [W-1:0] rho_q, opa_q, pix_x0_q, pix_y_q;
+    logic [W-1:0] rho_q, opa_q, pix_x0_q, pix_y_q, dr_q;
     logic         skip_q;
 
     // Projection datapath (operand-isolated).
@@ -122,6 +133,18 @@ module gs4d_accelerator_top #(
     assign out_valid = state == S_OUT;
     assign accept    = in_valid && in_ready;
     assign lk_serve  = lk_resp && lk_hit && !cache_bypass;
+    assign needs_attr = SPLIT_FETCH != 0 && state == S_LOOKUP && !(skip_q && lk_serve);
+
+    // Split fetch: miss-path base operands come from attr_data in ATTR, else the captures.
+    logic [W-1:0] attr_mu0_x, attr_mu0_y, attr_s0_x, attr_s0_y, attr_rho, attr_opacity;
+    logic [W-1:0] b_mu0x, b_mu0y, b_s0x, b_opa;
+    logic         in_attr;
+    assign {attr_mu0_x, attr_mu0_y, attr_s0_x, attr_s0_y, attr_rho, attr_opacity} = attr_data;
+    assign in_attr = SPLIT_FETCH != 0 && state == S_ATTR;
+    assign b_mu0x = in_attr ? attr_mu0_x : mu0x_q;
+    assign b_mu0y = in_attr ? attr_mu0_y : mu0y_q;
+    assign b_s0x  = in_attr ? attr_s0_x  : s0x_q;
+    assign b_opa  = in_attr ? attr_opacity : opa_q;
 
     // Deformation front-end: all basis-specific math lives in deform_engine.sv.
     logic [W-1:0] def_dmu_x, def_dmu_y, def_ds_x, def_ds_y, def_dr;
@@ -209,7 +232,7 @@ module gs4d_accelerator_top #(
             out_delta   <= '0;
             mu0x_q <= '0; mu0y_q <= '0; dmux_q <= '0; dmuy_q <= '0;
             s0x_q  <= '0; s0y_q  <= '0; dsx_q  <= '0; dsy_q  <= '0;
-            rho_q  <= '0; opa_q  <= '0; pix_x0_q <= '0; pix_y_q <= '0;
+            rho_q  <= '0; opa_q  <= '0; pix_x0_q <= '0; pix_y_q <= '0; dr_q <= '0;
             sx_q   <= '0; sy_q   <= '0; proj_a <= '0; proj_b <= '0;
             phase <= '0; ca_q <= '0; cb_q <= '0; cc_q <= '0; ac_q <= '0;
             inv_q <= '0; numerator <= '0; quotient <= '0; remainder_q <= '0;
@@ -228,6 +251,7 @@ module gs4d_accelerator_top #(
                     s0x_q    <= in_s0_x;   s0y_q  <= in_s0_y;
                     dsx_q    <= def_ds_x;  dsy_q  <= def_ds_y;
                     rho_q    <= fx_add(in_rho, def_dr);
+                    dr_q     <= def_dr;
                     opa_q    <= in_opacity;
                     pix_x0_q <= in_pix_x0; pix_y_q <= in_pix_y;
                     state    <= S_LOOKUP;
@@ -238,18 +262,38 @@ module gs4d_accelerator_top #(
                         out_skipped <= 1'b1;
                         {out_mean_x, out_mean_y, out_cov_a, out_cov_b, out_cov_c, out_opacity} <= lk_rdata;
                         state <= S_RASTER;
+                    end else if (SPLIT_FETCH != 0) begin
+                        out_skipped <= 1'b0;
+                        state <= S_ATTR;
                     end else begin
                         out_skipped <= 1'b0;
-                        out_mean_x  <= fx_add(mu0x_q, dmux_q);
-                        out_mean_y  <= fx_add(mu0y_q, dmuy_q);
-                        out_opacity <= opa_q;
-                        sx_q   <= fx_add(s0x_q, dsx_q);
+                        out_mean_x  <= fx_add(b_mu0x, dmux_q);
+                        out_mean_y  <= fx_add(b_mu0y, dmuy_q);
+                        out_opacity <= b_opa;
+                        sx_q   <= fx_add(b_s0x, dsx_q);
                         sy_q   <= fx_add(s0y_q, dsy_q);
-                        proj_a <= fx_add(s0x_q, dsx_q);
-                        proj_b <= fx_add(s0x_q, dsx_q);
+                        proj_a <= fx_add(b_s0x, dsx_q);
+                        proj_b <= fx_add(b_s0x, dsx_q);
                         phase <= '0;
                         state  <= S_PROJ;
                     end
+                end
+                S_ATTR: if (SPLIT_FETCH == 0) begin
+                    state <= S_ACCEPT;
+                end else if (attr_valid) begin
+                    mu0x_q <= attr_mu0_x; mu0y_q <= attr_mu0_y;
+                    s0x_q  <= attr_s0_x;  s0y_q  <= attr_s0_y;
+                    rho_q  <= fx_add(attr_rho, dr_q);
+                    opa_q  <= attr_opacity;
+                    out_mean_x  <= fx_add(b_mu0x, dmux_q);
+                    out_mean_y  <= fx_add(b_mu0y, dmuy_q);
+                    out_opacity <= b_opa;
+                    sx_q   <= fx_add(b_s0x, dsx_q);
+                    sy_q   <= fx_add(attr_s0_y, dsy_q);
+                    proj_a <= fx_add(b_s0x, dsx_q);
+                    proj_b <= fx_add(b_s0x, dsx_q);
+                    phase <= '0;
+                    state  <= S_PROJ;
                 end
                 S_PROJ: begin
                     phase <= phase + 1'b1;
