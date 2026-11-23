@@ -369,7 +369,7 @@ def write_stress(rows):
               f"{r['conic_err_over_10pct_small_s']} |" for k, r in r0.items()]
     (STRESS_OUT / "stress.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print("\n".join(lines))
-    fc = [r for r in rows if r["cache_bypass"] == 0 and not r["probe"]]
+    fc = [r for r in rows if r["cache_bypass"] == 0]
     write_penalty(fc, STRESS_OUT, "stress_miss_penalty_pareto", ("scene", "q_frac"))
 
 

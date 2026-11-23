@@ -228,7 +228,10 @@ no-skip, no-cache reference (`noskip_cycles + transactions * P`). FPS uses a nom
 
 Pareto frontier in (effective cycles ↓, PSNR ↑) within each Q_FRAC. Full table:
 [`phase5b/miss_penalty_pareto.csv`](phase5b/miss_penalty_pareto.csv). Stress scenes:
-[`phase5b/stress_miss_penalty_pareto.csv`](phase5b/stress_miss_penalty_pareto.csv).
+[`phase5b/stress_miss_penalty_pareto.csv`](phase5b/stress_miss_penalty_pareto.csv). The stress table also includes the
+fast-scene beyond-grid probe rows. On the fast scene, the 8 px Q8 probe (T=2048) is the
+fastest point: 10 fewer fetches at −0.08 dB. It joins the frontier at every P, and so do
+all grid thresholds, since they lose no PSNR.
 
 | Q_FRAC | Pareto-optimal T @ P = 0 | @ 10 | @ 50 | @ 100 | Point that leaves the frontier |
 |---:|---|---|---|---|---|
