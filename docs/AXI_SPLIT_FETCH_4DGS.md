@@ -240,9 +240,10 @@ The `axi_split_fetch` job in `.github/workflows/rtl-baseline.yml` has its own 12
 timeout. It runs, with `ABC=yosys-abc`:
 
 * `make sim_4dgs_axi`.
-* `make formal_4dgs_axi` (netlist + Z3).
-* `make synth_4dgs_axi AXI_SYNTH="--num-pe 1 --q-frac 8 --cache-ways 2"`: wrapper-vs-bare
-  synthesis and CEC at the `synth_4dgs` configuration.
+* `make formal_4dgs_axi AXI_SYNTH="--num-pe 1 --q-frac 8 --cache-ways 2"`, in funnel order:
+  * Tier 2: `synth_4dgs_axi`, wrapper-vs-bare synthesis and CEC at the `synth_4dgs`
+    configuration.
+  * Tier 3: netlist + Z3.
 
 The baseline job keeps the `make formal_4dgs` 45-obligation regression.
 

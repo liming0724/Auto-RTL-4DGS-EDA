@@ -134,7 +134,8 @@ AXI_SYNTH ?= --num-pe 2 --q-frac 12 --cache-ways 4
 synth_4dgs_axi:
 	$(PYTHON) scripts/dse/axi_flow.py synth $(AXI_SYNTH) $(G4_TOOLS)
 
-# Tier 3: composed wrapper + top (Q_FRAC=4) Z3 obligations (30 s breaker, COI slicing, BMC-20).
-formal_4dgs_axi: build_eda
+# Tier 3 (after Tier 2, as in DEVIN.md): composed wrapper + top (Q_FRAC=4) Z3 obligations
+# (30 s breaker, COI slicing, BMC-20).
+formal_4dgs_axi: synth_4dgs_axi build_eda
 	$(PYTHON) scripts/formal/rtl_to_netlist.py gs4d_axi --check $(FORMAL_TOOLS)
 	$(PYTHON) scripts/formal/verify_z3_4dgs_axi.py
