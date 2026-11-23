@@ -8,8 +8,8 @@ with basis_0 = t and basis_1 = the netlist's own basis_t2 net (basis_t2 == fxmul
 separate Z3 obligation in verify_z3_4dgs.py). deform_engine has no registers, so each
 product is a pure function of its 2W input bits; enumerating all 2^(2W) operand pairs on the
 gate-level netlist is a complete (unbounded) proof, not a bounded one. All 5 coef slices are
-driven with the same operand, which covers all 10 products in one sweep because each
-product's cone only reads its own slice and t (any other leaf raises KeyError).
+driven with the same operand, which covers all 10 products in one sweep; `check_leaves`
+first proves structurally that each product's cone reads only its own coef slice and t.
 
 A self-test first flips one XOR in a product cone and requires the sweep to see mismatches.
 Input: the BLIF written by rtl_to_netlist.py gs4d_deform (needs numpy).
@@ -80,6 +80,30 @@ def evaluate(nodes, roots, inputs):
     return {r: val[r] for r in roots}
 
 
+def leaves(nodes, roots):
+    """Primary inputs in the transitive fan-in of `roots`."""
+    stack, seen, out = list(roots), set(), set()
+    while stack:
+        net = stack.pop()
+        if net in seen:
+            continue
+        seen.add(net)
+        if net in nodes:
+            stack.extend(nodes[net][0])
+        else:
+            out.add(net)
+    return out
+
+
+def check_leaves(nodes):
+    """Each product reads only its own coef slice and t (so equal slices cannot mask miswiring)."""
+    for p in range(NPROD):
+        allowed = {f"coef[{p * W + i}]" for i in range(W)} | {f"t[{i}]" for i in range(W)}
+        extra = leaves(nodes, [f"prod[{p * PW + i}]" for i in range(PW)]) - allowed
+        if extra:
+            raise ValueError(f"product {p} reads {sorted(extra)}")
+
+
 def sweep(nodes):
     """Number of (product, operand pair) mismatches over all 2^(2W) pairs."""
     pack = lambda bits: np.packbits(bits.astype(np.uint8), bitorder="little").view(np.uint64)
@@ -122,6 +146,7 @@ def main():
     ap.add_argument("--blif", type=Path, default=ROOT / "build/formal/netlist/gs4d_deform/gs4d_deform.blif")
     args = ap.parse_args()
     nodes = read_blif(args.blif.read_text(encoding="utf-8"))
+    check_leaves(nodes)
     start = time.monotonic()
     mutant, net = mutate(nodes)
     caught = sweep(mutant)
