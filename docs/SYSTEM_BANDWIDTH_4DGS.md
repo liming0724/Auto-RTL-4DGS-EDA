@@ -7,6 +7,8 @@ design has no DRAM controller, no AXI master and no memory model.
 
 ```
 make profile_bw_4dgs   # 5 runs x Q_FRAC {8,12} -> build/4dgs/bandwidth/bandwidth_profile.{csv,json,md}
+make stress_4dgs       # Phase 5b stress scenes -> build/4dgs/stress/ (incl. stress_miss_penalty_pareto)
+make eval_quality_4dgs # also writes build/4dgs/quality/miss_penalty_pareto.{csv,md} (Phase 5b)
 ```
 
 ## Setup
@@ -163,6 +165,111 @@ no hits on this scene.
   T=1/3/16 rows (T=1 steady: **20.5% Q8, 20.4% Q12**). The headline reductions need a memory system that fetches the
   skip-decision fields separately from the full record. Phase 5b (ping-pong buffer +
   AXI4-Stream wrapper) is where that split would be designed.
+
+## Phase 5b: stress scenes and miss-penalty latency
+
+### Stress traffic (Modeled External DRAM Traffic)
+
+The scenes are defined in [QUALITY_VS_SKIP_4DGS.md §6](QUALITY_VS_SKIP_4DGS.md#6-phase-5b-stress-scenes-pan-fast).
+CSVs: [`phase5b/stress_*.csv`](phase5b/). Same formulas and CACHE_WAYS=4 build as above.
+
+| Scene | Q_FRAC | Baseline dram_read_bytes/frame | Full Co-Design T=1 | T=16 | T=64 | Reduction T=1 / T=64 |
+|---|---:|---:|---:|---:|---:|---:|
+| benign | 8 | 890,160 | 140,460 | 85,104 | 64,578 | 84.2% / 92.7% |
+| pan | 8 | 693,168 | 610,176 | 610,176 | 610,176 | **12.0% / 12.0%** |
+| fast | 8 | 860,202 | 124,848 | 124,848 | 124,848 | 85.5% / 85.5% |
+| benign | 12 | 1,094,155 | 190,282 | 161,417 | 144,816 | 82.6% / 86.8% |
+| pan | 12 | 852,019 | 750,008 | 750,008 | 750,008 | **12.0% / 12.0%** |
+| fast | 12 | 1,057,332 | 153,459 | 153,459 | 153,459 | 85.5% / 85.5% |
+
+- **Pan traffic is close to the no-cache Baseline at every threshold.** Full Co-Design
+  reads 88.0% of the pan Baseline at every T from 1 to 64, at both Q_FRAC values. The
+  cached entries are invalidated together: every Gaussian's offset jumps past T at once.
+  Only frame 0 is reused. The bandwidth story changes. The 82–93% reduction holds for
+  object motion over a static background, but a global camera pan leaves the
+  accelerator streaming nearly the full parameter set every frame. Recovering it would
+  need a camera-relative offset in the skip metric, which is a datapath change and out
+  of scope.
+- **Fast motion does not thrash.** Fast movers always miss, but the 60% static
+  background still hits. Traffic is 85.5% below Baseline: fewer bytes than benign at T=1,
+  because more movers leave the frame.
+
+### Miss-penalty sensitivity (effective cycles, no-overlap bound)
+
+The existing cycle counts are **compute-only**: the RTL FSM equals the golden cycle model,
+and the RTL has no memory stall. Phase 5b adds a latency model in the reporting layer only
+(`scripts/dse/quality_sweep.py`, `MISS_PENALTY_CYCLES`):
+
+```
+effective cycles @ P-cycle miss penalty = compute-only cycles + fetch_count * P
+```
+
+This is a **conservative no-overlap bound**:
+- every fetched (non-cache-served) transaction stalls for the full P cycles;
+- no pipelining, prefetch or burst overlap;
+- `fetch_count` comes from the Phase 5a profiler.
+
+No RTL or golden-model cycle count changed. The table re-scores the 18 quality-sweep points
+(default CACHE_WAYS=2 build) at P ∈ {0, 10, 50, 100}. Effective speedup is relative to the
+no-skip, no-cache reference (`noskip_cycles + transactions * P`). FPS uses a nominal
+100 MHz clock (illustrative only, not a timing result) and 8 frames.
+
+| Q_FRAC | T | fetch_count | Eff. speedup @ 0 / 10 / 50 / 100 (no-overlap) | Stall share @ 50 | FPS @ 100 MHz, P = 0 / 50 / 100 |
+|---:|---:|---:|---|---:|---|
+| 8 | 0 | 148,360 | 1.00x / 1.00x / 1.00x / 1.00x | 59.5% | 159 / 64 / 40 |
+| 8 | 1 | 23,410 | 3.02x / 3.43x / 4.39x / 4.96x | 41.2% | 479 / 282 / 199 |
+| 8 | 3 | 19,650 | 3.22x / 3.70x / 4.88x / 5.63x | 38.5% | 510 / 314 / 226 |
+| 8 | 16 | 14,184 | 3.55x / 4.18x / 5.85x / 7.00x | 33.3% | 563 / 375 / 282 |
+| 8 | 64 | 10,763 | 3.80x / 4.54x / 6.67x / 8.27x | 28.8% | 602 / 428 / 333 |
+| 12 | 0 | 148,360 | 1.00x / 1.00x / 1.00x / 1.00x | 54.3% | 128 / 59 / 38 |
+| 12 | 1 | 25,801 | 3.21x / 3.51x / 4.22x / 4.66x | 39.9% | 412 / 248 / 177 |
+| 12 | 16 | 21,887 | 3.45x / 3.81x / 4.71x / 5.28x | 37.8% | 443 / 276 / 200 |
+| 12 | 64 | 19,636 | 3.61x / 4.01x / 5.04x / 5.71x | 36.3% | 464 / 295 / 217 |
+
+Pareto frontier in (effective cycles ↓, PSNR ↑) within each Q_FRAC. Full table:
+[`phase5b/miss_penalty_pareto.csv`](phase5b/miss_penalty_pareto.csv). Stress scenes:
+[`phase5b/stress_miss_penalty_pareto.csv`](phase5b/stress_miss_penalty_pareto.csv).
+
+| Q_FRAC | Pareto-optimal T @ P = 0 | @ 10 | @ 50 | @ 100 | Point that leaves the frontier |
+|---:|---|---|---|---|---|
+| 8 | 3, 4, 8, 16, 32, 64 | same | same | same | none for P ≤ 1000 |
+| 12 | 32, 64 | same | same | same | none for P ≤ 1000 |
+
+- **The frontier does not move: no low-threshold point leaves it at any penalty up to
+  1000 cycles.** This is structural for this design. A skip is a cache hit, so raising T
+  lowers `fetch_count` and compute cycles together. The penalty term
+  `fetch_count * P` therefore has the same order as the compute term. A point on the
+  frontier has strictly higher PSNR than every point with fewer effective cycles, and
+  that stays true as P grows. Low-T points that are off the frontier were already
+  dominated at P = 0, by a higher T with equal or better PSNR:
+  - Q8 T = 0, 1, 2 (T=3 has +0.003 dB);
+  - Q12 T = 0–16 (T=32 is +0.0003 dB, inside noise).
+- **What the penalty changes is the size of the gap, not the order of the points.** At P
+  = 50, Baseline spends 59.5% (Q8) of its effective cycles waiting on DRAM. Full
+  Co-Design's advantage grows:
+  - Q8 T=1 goes from 3.02x to 4.39x, and T=64 from 3.80x to 6.67x;
+  - Q8 T=64 vs T=1 goes from 1.26x at P = 0 to 1.67x at P = 100.
+
+  So Phase 5a's DRAM-byte savings are worth more FPS once fetch latency is counted. The
+  extra quality from a low T costs proportionally more frame time: at P = 100, Q8 T=1
+  runs at 199 FPS vs T=64 at 333 FPS (nominal 100 MHz).
+- **Pan erases the gain.** Pan Full Co-Design is 1.10x (Q8) at P = 0 and stays near that
+  as P grows (13.7 M vs 15.5 M effective cycles at P = 100), because 88% of the
+  transactions still fetch.
+
+### Phase 5b verification (three-tier funnel)
+
+Phase 5b changes no RTL. It changes the scene generator, golden-model characterization
+helpers, testbenches and reporting scripts.
+
+| Tier | Check | Result |
+|---|---|---|
+| 1 Verilator | `verilator --lint-only -Wall` on `gs4d_accelerator_top` | 0 warnings (no `.sv` changed vs c0a9b14) |
+| 1 Verilator | `make stress_4dgs` (pan + fast + benign, Q8/Q12, 9 thresholds + fast probe) | 70 runs, **0 mismatches** |
+| 1 Verilator | `make conic_cliff_4dgs` (2 x 23,125 small-det points through the RTL) | 0 mismatches; characterization reported, not gated |
+| 1 Verilator | `make sim_4dgs`, `make eval_quality_4dgs`, `make profile_bw_4dgs`, `make sim_4dgs_frame` | PASS; `quality_vs_skip.{csv,md}`, `bandwidth_profile.{csv,md}`, `golden_sweep.csv`, frame traces and RESULT lines **byte-identical** to c0a9b14; ConicCheck `failures=0`, `inv_saturated=24` (Q8) / 0 (Q12) as before |
+| 2 Yosys + ABC | `synth_4dgs`, default config | **50,910 generic gates**, 2,275 FFs, 61,125 AIG ANDs, 336 levels; **CEC PASS** |
+| 3 Z3 | `make formal_4dgs` (30 s timeout, COI slicing, BMC-20) | **45/45 as expected** |
 
 ## Verification (three-tier funnel)
 

@@ -42,16 +42,52 @@ struct Gauss {
   float rgb[3];
 };
 
-inline std::vector<Gauss> make_scene(uint64_t seed = 0x34444753ull) {
+// Scene modes (Phase 5b). kBenign is the Phase 4/5a scene and the default, so every earlier
+// sweep number reproduces bit for bit; the stress modes reuse the same PRNG draws.
+//   kBenign  60% static, moving amplitude log-uniform 0.002..12 px over t in [0, 1)
+//   kPan     kBenign plus a uniform global camera pan added to every Gaussian's mu(t):
+//            direction kPanDir, per-frame step ramping linearly 2 -> 4 px/frame over
+//            frames 0 -> 7 (mu += c1 t + c2 t^2, c1 = kPanC1, c2 = kPanC2). mu0 is spawned
+//            over the frame extended by the total pan, upstream of the pan, so the frame
+//            stays covered. Gaussians whose 3.5-sigma box leaves the 64x64 frame are
+//            clipped by bin_spans (drop when fully outside); golden and RTL see the same
+//            transaction list.
+//   kFast    moving amplitude log-uniform with per-frame speed 1.5..8 px/frame (median
+//            ~3.5 px/frame); proportional curvature; scale / rho drift capped at the
+//            benign maximum (factor min(1, sp/12)); same 60/40 static/dynamic split.
+enum class SceneMode { kBenign, kPan, kFast };
+
+inline const char* scene_name(SceneMode m) {
+  return m == SceneMode::kPan ? "pan" : m == SceneMode::kFast ? "fast" : "benign";
+}
+inline bool parse_scene(const char* s, SceneMode* m) {
+  for (SceneMode k : {SceneMode::kBenign, SceneMode::kPan, SceneMode::kFast})
+    if (!std::strcmp(s, scene_name(k))) { *m = k; return true; }
+  return false;
+}
+
+constexpr double kPanDir[2] = {0.8, 0.6};
+// Per-frame step d(k+1) - d(k) = c1/8 + c2 (2k+1)/64 = 2 px at k = 0 and 4 px at k = 6.
+constexpr double kPanC2 = 2.0 * 64.0 / 12.0;
+constexpr double kPanC1 = 8.0 * (2.0 - kPanC2 / 64.0);
+constexpr double kFastMinStep = 1.5, kFastMaxStep = 8.0;  // px/frame
+
+inline double pan_total() {  // pan displacement at the last frame, px
+  const double t = (kFrameCount - 1.0) / kFrameCount;
+  return kPanC1 * t + kPanC2 * t * t;
+}
+
+inline std::vector<Gauss> make_scene(SceneMode mode = SceneMode::kBenign, uint64_t seed = 0x34444753ull) {
   using gs4d_ref::urand;
   uint64_t s = seed;
   std::vector<Gauss> scene;
+  const double ext = mode == SceneMode::kPan ? pan_total() : 0.0;
   for (int i = 0; i < kFrameGaussians; ++i) {
     Gauss g{};
     g.id = static_cast<uint32_t>(i);
     g.moving = (i % 5) >= 3;  // 40% foreground
-    g.mu0x = static_cast<float>(urand(s, 2.0, 62.0));
-    g.mu0y = static_cast<float>(urand(s, 2.0, 62.0));
+    g.mu0x = static_cast<float>(urand(s, 2.0 - ext * kPanDir[0], 62.0));
+    g.mu0y = static_cast<float>(urand(s, 2.0 - ext * kPanDir[1], 62.0));
     const double lo = g.moving ? 0.8 : 1.5, hi = g.moving ? 2.0 : 3.5;
     g.s0x = static_cast<float>(urand(s, lo, hi));
     g.s0y = static_cast<float>(urand(s, lo, hi));
@@ -62,18 +98,28 @@ inline std::vector<Gauss> make_scene(uint64_t seed = 0x34444753ull) {
       // Motion amplitude log-uniform from ~0.002 px to 12 px over t in [0, 1) (up to
       // ~1.5 px/frame), so every MOTION_THRESH in the sweep separates some Gaussians;
       // curvature, scale and rotation drift scale with it.
-      const double sp = 12.0 * std::pow(10.0, -urand(s, 0.0, 3.8)), th = urand(s, 0.0, 6.283185307179586);
-      const double f = sp / 12.0;
+      const double u = urand(s, 0.0, 3.8);
+      const double sp = mode == SceneMode::kFast
+                            ? kFrameCount * kFastMinStep * std::pow(kFastMaxStep / kFastMinStep, u / 3.8)
+                            : 12.0 * std::pow(10.0, -u);
+      const double th = urand(s, 0.0, 6.283185307179586);
+      const double f = sp / 12.0, fd = std::min(1.0, f);
       g.coef[0] = static_cast<float>(sp * std::cos(th));
       g.coef[2] = static_cast<float>(sp * std::sin(th));
       g.coef[1] = static_cast<float>(f * urand(s, -4.0, 4.0));
       g.coef[3] = static_cast<float>(f * urand(s, -4.0, 4.0));
-      g.coef[4] = static_cast<float>(f * urand(s, -0.4, 0.4));
-      g.coef[6] = static_cast<float>(f * urand(s, -0.4, 0.4));
-      g.coef[5] = static_cast<float>(f * urand(s, -0.2, 0.2));
-      g.coef[7] = static_cast<float>(f * urand(s, -0.2, 0.2));
-      g.coef[8] = static_cast<float>(f * urand(s, -0.3, 0.3));
-      g.coef[9] = static_cast<float>(f * urand(s, -0.1, 0.1));
+      g.coef[4] = static_cast<float>(fd * urand(s, -0.4, 0.4));
+      g.coef[6] = static_cast<float>(fd * urand(s, -0.4, 0.4));
+      g.coef[5] = static_cast<float>(fd * urand(s, -0.2, 0.2));
+      g.coef[7] = static_cast<float>(fd * urand(s, -0.2, 0.2));
+      g.coef[8] = static_cast<float>(fd * urand(s, -0.3, 0.3));
+      g.coef[9] = static_cast<float>(fd * urand(s, -0.1, 0.1));
+    }
+    if (mode == SceneMode::kPan) {
+      g.coef[0] = static_cast<float>(g.coef[0] + kPanC1 * kPanDir[0]);
+      g.coef[1] = static_cast<float>(g.coef[1] + kPanC2 * kPanDir[0]);
+      g.coef[2] = static_cast<float>(g.coef[2] + kPanC1 * kPanDir[1]);
+      g.coef[3] = static_cast<float>(g.coef[3] + kPanC2 * kPanDir[1]);
     }
     scene.push_back(g);
   }
@@ -89,6 +135,22 @@ inline Deformed deform_fp32(const Gauss& g, float t) {
   const float t2 = t * t;
   auto d = [&](int o) { return g.coef[2 * o] * t + g.coef[2 * o + 1] * t2; };
   return {g.mu0x + d(0), g.mu0y + d(1), g.s0x + d(2), g.s0y + d(3), g.rho0 + d(4)};
+}
+
+// Median per-frame displacement |mu(t_{k+1}) - mu(t_k)| (px) over frames 0..kFrameCount-1
+// of the Gaussians that move (moving foreground, or every Gaussian under a pan).
+inline double median_step_px(const std::vector<Gauss>& scene) {
+  std::vector<double> d;
+  for (const Gauss& g : scene) {
+    if (g.coef[0] == 0 && g.coef[1] == 0 && g.coef[2] == 0 && g.coef[3] == 0) continue;
+    for (int k = 0; k + 1 < kFrameCount; ++k) {
+      const Deformed a = deform_fp32(g, frame_time(k)), b = deform_fp32(g, frame_time(k + 1));
+      d.push_back(std::hypot(double(b.mx) - a.mx, double(b.my) - a.my));
+    }
+  }
+  if (d.empty()) return 0;
+  std::nth_element(d.begin(), d.begin() + d.size() / 2, d.end());
+  return d[d.size() / 2];
 }
 
 enum class ExpModel { kExact, kHardware };

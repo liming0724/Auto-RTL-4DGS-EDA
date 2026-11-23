@@ -12,6 +12,10 @@
 //   * at least 20,000 simulated cycles.
 // Compile-time parameters NUM_PE, Q_FRAC, CACHE_WAYS, CACHE_SETS match the -G values.
 // Runtime: +thresh=<MOTION_THRESH> (default 16), +seed=<n>.
+// Phase 5b: +smalldet=<csv> also streams the small-determinant directed conic grid
+// (gs4d_ref::small_det_grid: sx, sy in [0.1, 1.0], rho in [-0.9, 0.9]) through the RTL, checked
+// bit-true like every other transaction, and writes one gs4d_ref::probe_conic row per point
+// (characterization only: these points are not fed to ConicCheck and never gate PASS).
 #include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
@@ -138,9 +142,11 @@ int main(int argc, char** argv) {
   Verilated::commandArgs(argc, argv);
   uint32_t thresh = 16;
   uint64_t seed = 0x4dd5eedull;
+  const char* smalldet = nullptr;
   for (int i = 1; i < argc; ++i) {
     if (!std::strncmp(argv[i], "+thresh=", 8)) thresh = static_cast<uint32_t>(std::atoi(argv[i] + 8));
     if (!std::strncmp(argv[i], "+seed=", 6)) seed = std::strtoull(argv[i] + 6, nullptr, 0);
+    if (!std::strncmp(argv[i], "+smalldet=", 10)) smalldet = argv[i] + 10;
   }
   gs4d_ref::Config cfg{NUM_PE, Q_FRAC, CACHE_WAYS, CACHE_SETS, thresh};
   gs4d_ref::Accelerator model(cfg);
@@ -178,6 +184,31 @@ int main(int argc, char** argv) {
     stim.push_back(g); expect.push_back(o); frame_of.push_back(gs4d_ref::kFrames-1);
     model_cycles[gs4d_ref::kFrames-1] += o.cycles;
     noskip_cycles[gs4d_ref::kFrames-1] += o.cycles;
+  }
+  size_t sd_begin = 0, sd_end = 0;  // small-det rows: bit-true checked, kept out of ConicCheck
+  if (smalldet) {
+    sd_begin = stim.size();
+    std::FILE* csv = std::fopen(smalldet, "w");
+    if (!csv) { std::printf("cannot write %s\n", smalldet); return 1; }
+    std::fprintf(csv, "q_frac,sx,sy,rho,qsx,qsy,qrho,det_lsb,inv_saturated,out_of_range,rel_err,flicker,"
+                      "flicker_exact,cov_a,cov_b,cov_c\n");
+    const gs4d_ref::Fx fx(Q_FRAC);
+    for (const auto& pt : gs4d_ref::small_det_grid(Q_FRAC)) {
+      auto g = gs4d_ref::conic_vector(Q_FRAC, pt.qsx, pt.qsy, pt.qrho);
+      g.dmu_x = g.pix_x0;  // force recompute even with nonzero threshold
+      g.pix_x0 += g.dmu_x;
+      const auto o = model.step(g, &st);
+      stim.push_back(g); expect.push_back(o); frame_of.push_back(gs4d_ref::kFrames-1);
+      model_cycles[gs4d_ref::kFrames-1] += o.cycles;
+      noskip_cycles[gs4d_ref::kFrames-1] += o.cycles;
+      const auto p = gs4d_ref::probe_conic(fx, pt.qsx, pt.qsy, pt.qrho);
+      std::fprintf(csv, "%d,%.2f,%.2f,%.2f,%lld,%lld,%lld,%lld,%d,%d,%.6f,%.6f,%.6f,%lld,%lld,%lld\n", Q_FRAC,
+                   pt.sx, pt.sy, pt.rho, (long long)pt.qsx, (long long)pt.qsy, (long long)pt.qrho,
+                   (long long)p.det_lsb, p.saturated, p.out_of_range, p.rel_err, p.flicker, p.flicker_exact,
+                   (long long)o.attr.cov_a, (long long)o.attr.cov_b, (long long)o.attr.cov_c);
+    }
+    std::fclose(csv);
+    sd_end = stim.size();
   }
   auto directed = gs4d_ref::directed_conic(Q_FRAC);
   directed.dmu_x = directed.pix_x0;  // force recompute even with nonzero threshold
@@ -263,7 +294,8 @@ int main(int argc, char** argv) {
         const auto d = gs4d_ref::deform(fx, inputs.front());
         const int64_t one = int64_t{1} << Q_FRAC;
         const int64_t sx = fx.add(d.s0_x, d.ds_x), sy = fx.add(d.s0_y, d.ds_y);
-        if (std::llabs(d.rho) < one && std::llabs(sx) < 11 * one && std::llabs(sy) < 11 * one)
+        const bool small_det = outputs >= sd_begin && outputs < sd_end;
+        if (!small_det && std::llabs(d.rho) < one && std::llabs(sx) < 11 * one && std::llabs(sy) < 11 * one)
           conic_check.check(fx, d, attr);
       }
       if (outputs == total-1 && Q_FRAC == 8) {

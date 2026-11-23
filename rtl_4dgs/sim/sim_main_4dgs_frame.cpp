@@ -15,9 +15,15 @@
 // design has no write path to external memory).
 // With +bypass=1 (cache_bypass) every lookup is a forced miss, so the golden model is the
 // T=0 model (cache contents can never reach an output); out_delta is threshold-independent.
-// Usage: Vgs4d_accelerator_top +thresh=<N> +out=<dir> [+bypass=<0|1>]
+// Phase 5b: +scene=<benign|pan|fast> selects the scene mode of gs4d_frame::make_scene (default
+// benign, the Phase 4/5a scene). The SCENE line reports the measured median per-frame
+// displacement, the golden model's cache tag hits (lookups that found the id, whether or not
+// the skip gate let them be served) and the scene's conic operating range: per (Gaussian,
+// frame), the deformed fixed-point (sx, sy, rho(t)) probed with gs4d_ref::probe_conic.
+// Usage: Vgs4d_accelerator_top +thresh=<N> +out=<dir> [+bypass=<0|1>] [+scene=<mode>]
 #include <algorithm>
 #include <cinttypes>
+#include <climits>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -93,13 +99,18 @@ int main(int argc, char** argv) {
   Verilated::commandArgs(argc, argv);
   uint32_t thresh = 0, bypass = 0;
   std::string dir = ".";
+  gs4d_frame::SceneMode mode = gs4d_frame::SceneMode::kBenign;
   for (int i = 1; i < argc; ++i) {
     if (!std::strncmp(argv[i], "+thresh=", 8)) thresh = static_cast<uint32_t>(std::atoi(argv[i] + 8));
     if (!std::strncmp(argv[i], "+out=", 5)) dir = argv[i] + 5;
     if (!std::strncmp(argv[i], "+bypass=", 8)) bypass = std::atoi(argv[i] + 8) != 0;
+    if (!std::strncmp(argv[i], "+scene=", 7) && !gs4d_frame::parse_scene(argv[i] + 7, &mode)) {
+      std::fprintf(stderr, "unknown scene %s\n", argv[i] + 7);
+      return 2;
+    }
   }
   using namespace gs4d_frame;
-  const auto scene = make_scene();
+  const auto scene = make_scene(mode);
   gs4d_ref::Config cfg{1, Q_FRAC, CACHE_WAYS, 512, bypass ? 0u : thresh};
   const gs4d_ref::Fx fx(Q_FRAC);
   gs4d_ref::Accelerator model(cfg);
@@ -280,6 +291,44 @@ int main(int argc, char** argv) {
               (unsigned long long)(fetch * kBytesPerGaussian),
               (unsigned long long)(fetch * kBytesPerGaussian + served * kServedBytes), fetch_list.c_str(),
               bytes_list.c_str());
+  // Scene conic operating range (characterization, not a gate).
+  {
+    int64_t min_det = INT64_MAX;
+    double max_err = 0, max_flicker = 0, min_s = 1e9, max_rho = 0;
+    uint64_t pairs = 0, over10 = 0, over10_small = 0, sat = 0;
+    double we[3] = {}, wf[3] = {};
+    for (int fr = 0; fr < kFrameCount; ++fr)
+      for (const Gauss& g : scene) {
+        const Deformed fd = deform_fp32(g, frame_time(fr));
+        const float r = kFootprint * std::max(std::fabs(fd.sx), std::fabs(fd.sy));
+        if (fd.mx + r < 0 || fd.my + r < 0 || fd.mx - r > kFrameSize - 1 || fd.my - r > kFrameSize - 1) continue;
+        const gs4d_ref::GaussIn d = gs4d_ref::deform(fx, quantize(g, Span{0, 0, 0}, fr, Q_FRAC));
+        const int64_t sx = fx.add(d.s0_x, d.ds_x), sy = fx.add(d.s0_y, d.ds_y);
+        const auto p = gs4d_ref::probe_conic(fx, sx, sy, d.rho);
+        ++pairs;
+        const double sxp = sx * unit, syp = sy * unit, rp = d.rho * unit;
+        if (p.rel_err > max_err) { we[0] = sxp; we[1] = syp; we[2] = rp; }
+        if (p.flicker > max_flicker) { wf[0] = sxp; wf[1] = syp; wf[2] = rp; }
+        over10_small += p.rel_err > 0.10 && std::min(std::fabs(sxp), std::fabs(syp)) < 1.0;
+        min_det = std::min(min_det, p.det_lsb);
+        max_err = std::max(max_err, p.rel_err);
+        max_flicker = std::max(max_flicker, p.flicker);
+        over10 += p.rel_err > 0.10;
+        sat += p.saturated;
+        min_s = std::min({min_s, std::fabs(sx * unit), std::fabs(sy * unit)});
+        max_rho = std::max(max_rho, std::fabs(d.rho * unit));
+      }
+    std::printf("SCENE {\"scene\": \"%s\", \"median_step_px\": %.6f, \"cache_tag_hits\": %llu, "
+                "\"conic_pairs\": %llu, \"min_det_lsb\": %lld, \"max_conic_rel_err\": %.6f, "
+                "\"max_conic_flicker\": %.6f, \"conic_err_over_10pct\": %llu, \"conic_err_over_10pct_small_s\": %llu, "
+                "\"conic_inv_saturated\": %llu, \"min_s_px\": %.6f, \"max_abs_rho\": %.6f, "
+                "\"worst_err_sx\": %.6f, \"worst_err_sy\": %.6f, \"worst_err_rho\": %.6f, "
+                "\"worst_flk_sx\": %.6f, \"worst_flk_sy\": %.6f, \"worst_flk_rho\": %.6f}\n",
+                scene_name(mode), median_step_px(scene), (unsigned long long)st.cache_hits,
+                (unsigned long long)pairs, (long long)min_det, max_err, max_flicker, (unsigned long long)over10,
+                (unsigned long long)over10_small, (unsigned long long)sat, min_s, max_rho, we[0], we[1], we[2], wf[0],
+                wf[1], wf[2]);
+  }
   std::puts(fails ? "FAIL" : "PASS");
   return fails ? 1 : 0;
 }

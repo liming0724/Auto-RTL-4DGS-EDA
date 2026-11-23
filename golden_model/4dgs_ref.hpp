@@ -18,6 +18,7 @@
 // plus 11 + 2*Q_FRAC projection cycles when the conic is recomputed.
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -94,6 +95,8 @@ class Fx {
   gs4d::QFormat q_;
   gs4d::FxMode m_;
 };
+
+inline int64_t q(double v, int f) { return static_cast<int64_t>(std::llround(std::ldexp(v, f))); }
 
 inline int64_t log2e_q(int f) { return ((int64_t{94548} << f) + 32768) >> 16; }
 
@@ -205,6 +208,80 @@ inline GaussIn directed_conic(int f) {
   g.opacity = int64_t{1} << f;
   g.pix_x0 = int64_t{1} << f;
   return g;
+}
+
+// Phase 5b small-determinant characterization (reported, never a pass/fail gate; the
+// ConicCheck criteria above are unchanged). For raw Q(7,F) inputs (sx, sy, rho) with no
+// deformation, compares project() against the exact double conic_from_scale of the same
+// dequantized inputs:
+//   det_lsb      fixed-point determinant of project() in raw LSBs
+//   saturated    reciprocal clipped (det <= 0 or 2^(2F)/det > FX_MAX), as in ConicCheck
+//   out_of_range exact conic magnitude exceeds the Q(7,F) range (not representable)
+//   rel_err      max_i |conic_i - ref_i| / max_j |ref_j|
+//   flicker      max over +-1 LSB of sx, sy, rho of max_i |dconic_i| / max_j |ref_j|
+//   flicker_exact the same input perturbation applied to the exact conic
+inline GaussIn conic_vector(int f, int64_t sx, int64_t sy, int64_t rho) {
+  GaussIn g = directed_conic(f);
+  g.s0_x = sx; g.s0_y = sy; g.rho = rho;
+  return g;
+}
+
+struct ConicProbe {
+  int64_t det_lsb = 0;
+  bool saturated = false, out_of_range = false;
+  double rel_err = 0, flicker = 0, flicker_exact = 0;
+};
+
+inline int64_t conic_det_lsb(const Fx& fx, const GaussIn& g) {
+  const int64_t sx = fx.add(g.s0_x, g.ds_x), sy = fx.add(g.s0_y, g.ds_y);
+  const int64_t ca = fx.mul(sx, sx), cc = fx.mul(sy, sy), cb = fx.mul(g.rho, fx.mul(sx, sy));
+  return fx.sub(fx.mul(ca, cc), fx.mul(cb, cb));
+}
+
+inline ConicProbe probe_conic(const Fx& fx, int64_t sx, int64_t sy, int64_t rho) {
+  const int f = fx.frac();
+  const double unit = std::ldexp(1.0, -f);
+  const int64_t max = (int64_t{1} << (fx.w() - 1)) - 1;
+  auto exact = [&](int64_t x, int64_t y, int64_t r) {
+    const auto c = gs4d::conic_from_scale(x * unit, y * unit, r * unit);
+    return std::array<double, 3>{c.a, c.b, c.c};
+  };
+  auto fixed = [&](int64_t x, int64_t y, int64_t r) {
+    const Attr a = project(fx, conic_vector(f, x, y, r));
+    return std::array<double, 3>{a.cov_a * unit, a.cov_b * unit, a.cov_c * unit};
+  };
+  ConicProbe p;
+  const GaussIn g = conic_vector(f, sx, sy, rho);
+  p.det_lsb = conic_det_lsb(fx, g);
+  p.saturated = p.det_lsb <= 0 || ((int64_t{1} << (2 * f)) + (p.det_lsb >> 1)) / p.det_lsb > max;
+  const auto ref = exact(sx, sy, rho), val = fixed(sx, sy, rho);
+  double scale = 0;
+  for (double v : ref) scale = std::max(scale, std::abs(v));
+  p.out_of_range = !std::isfinite(scale) || scale > max * unit;
+  for (int i = 0; i < 3; ++i) p.rel_err = std::max(p.rel_err, std::abs(val[i] - ref[i]) / scale);
+  const int64_t d[6][3] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+  for (const auto& k : d) {
+    const auto v2 = fixed(sx + k[0], sy + k[1], rho + k[2]), r2 = exact(sx + k[0], sy + k[1], rho + k[2]);
+    for (int i = 0; i < 3; ++i) {
+      p.flicker = std::max(p.flicker, std::abs(v2[i] - val[i]) / scale);
+      if (std::isfinite(r2[i])) p.flicker_exact = std::max(p.flicker_exact, std::abs(r2[i] - ref[i]) / scale);
+    }
+  }
+  return p;
+}
+
+// Directed grid: sx, sy in {0.10, 0.12, ..., 0.30} (the cliff region) plus
+// {0.35, 0.40, ..., 1.00} (context, the benign ConicCheck range), rho in {-0.90, -0.85, ..., 0.90}.
+struct ConicGridPoint { double sx, sy, rho; int64_t qsx, qsy, qrho; };
+inline std::vector<ConicGridPoint> small_det_grid(int f) {
+  std::vector<double> s, r;
+  for (int i = 0; i <= 10; ++i) s.push_back(0.10 + 0.02 * i);
+  for (int i = 1; i <= 14; ++i) s.push_back(0.30 + 0.05 * i);
+  for (int i = -18; i <= 18; ++i) r.push_back(0.05 * i);
+  std::vector<ConicGridPoint> out;
+  for (double x : s) for (double y : s) for (double p : r)
+    out.push_back({x, y, p, q(x, f), q(y, f), q(p, f)});
+  return out;
 }
 
 inline std::vector<GaussIn> conic_edges(int f) {
@@ -364,7 +441,6 @@ inline std::vector<SceneGauss> make_scene(uint64_t seed = 0x4D47534Eull) {
   return scene;
 }
 
-inline int64_t q(double v, int f) { return static_cast<int64_t>(std::llround(std::ldexp(v, f))); }
 
 inline std::vector<GaussIn> make_frame(const std::vector<SceneGauss>& scene, int t, int f) {
   std::vector<GaussIn> out;
