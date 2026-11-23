@@ -336,7 +336,8 @@ transaction counts differ: 148,360 (benign), 115,528 (pan), 143,367 (fast).
 Sweep: CACHE_WAYS=4 profiler build, Q_FRAC {8, 12}. Each scene gets Baseline
 (`cache_bypass=1`, T=0), Skip-Only (`cache_bypass=1`, T=16) and Full Co-Design
 (`cache_bypass=0`) at T {0, 1, 2, 3, 4, 8, 16, 32, 64}. Fast also gets a beyond-grid probe at
-T = 0.5–8 px. 70 runs, **0 mismatches** vs golden. CSVs (Phase 5a profiler columns, plus
+T = 0.5–8 px. 76 runs: 66 grid runs (3 scenes x 2 Q_FRAC x 11 modes) + 10 fast-scene probe
+runs (5 thresholds x 2 Q_FRAC); **0 mismatches** vs golden. CSVs (Phase 5a profiler columns, plus
 `scene`, `hit_rate`, `psnr_drop_db` and conic stats):
 [`phase5b/stress_benign.csv`](phase5b/stress_benign.csv),
 [`phase5b/stress_pan.csv`](phase5b/stress_pan.csv),

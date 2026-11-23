@@ -268,7 +268,7 @@ helpers, testbenches and reporting scripts.
 | Tier | Check | Result |
 |---|---|---|
 | 1 Verilator | `verilator --lint-only -Wall` on `gs4d_accelerator_top` | 0 warnings (no `.sv` changed vs c0a9b14) |
-| 1 Verilator | `make stress_4dgs` (pan + fast + benign, Q8/Q12, 9 thresholds + fast probe) | 70 runs, **0 mismatches** |
+| 1 Verilator | `make stress_4dgs` (pan + fast + benign, Q8/Q12, 9 thresholds + fast probe) | 76 runs = 66 grid (3 scenes x 2 Q_FRAC x 11 modes: Baseline, Skip-Only, 9 Full Co-Design T) + 10 fast probe (5 T x 2 Q_FRAC), **0 mismatches** |
 | 1 Verilator | `make conic_cliff_4dgs` (2 x 23,125 small-det points through the RTL) | 0 mismatches; characterization reported, not gated |
 | 1 Verilator | `make sim_4dgs`, `make eval_quality_4dgs`, `make profile_bw_4dgs`, `make sim_4dgs_frame` | PASS; `quality_vs_skip.{csv,md}`, `bandwidth_profile.{csv,md}`, `golden_sweep.csv`, frame traces and RESULT lines **byte-identical** to c0a9b14; ConicCheck `failures=0`, `inv_saturated=24` (Q8) / 0 (Q12) as before |
 | 2 Yosys + ABC | `synth_4dgs`, default config | **50,910 generic gates**, 2,275 FFs, 61,125 AIG ANDs, 336 levels; **CEC PASS** |
