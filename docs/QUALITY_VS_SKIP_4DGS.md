@@ -212,6 +212,11 @@ Q_FRAC's T=0 baseline.
   T=1 and T=2 are dominated by T=3, which is faster with PSNR at least as high. At Q12,
   T=1..3 are dominated by T=32 (faster, higher PSNR), like T=4..16 in Phase 4. The
   Phase 4 Pareto marks are unchanged.
+- **Bandwidth at the knee:** `docs/SYSTEM_BANDWIDTH_4DGS.md` profiles Full Co-Design
+  (`CACHE_WAYS=4`, `cache_bypass=0`) at T=1 and T=3 as well as T=16. At the lossless
+  T=1, Modeled External DRAM Traffic drops 84.2% (Q8) and 82.6% (Q12) vs Baseline over
+  8 frames, and 82.2% / 80.3% in steady state (frames 1–7, excluding the cold-cache
+  frame 0). Conservative figures are in the same document.
 
 ### Knee-point recommendations
 

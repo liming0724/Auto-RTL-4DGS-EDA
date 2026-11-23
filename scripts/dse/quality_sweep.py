@@ -8,10 +8,11 @@
   sweep    Q_FRAC {8, 12} x MOTION_THRESH {0, 1, 2, 3, 4, 8, 16, 32, 64}: skip rate, total
            cycles, speedup vs. unskipped, PSNR vs. FP32, hardware SSIM (SSIM_v2); writes
            quality_vs_skip.csv / .json / .md
-  profile  Bandwidth profiler (build/4dgs/bandwidth/), Q_FRAC {8, 12} x three modes on a
+  profile  Bandwidth profiler (build/4dgs/bandwidth/), Q_FRAC {8, 12} x five runs on a
            CACHE_WAYS=4 build: Baseline (cache_bypass=1, T=0), Skip-Only (cache_bypass=1,
-           T=16), Full Co-Design (cache_bypass=0, T=16). Modeled External DRAM Traffic per
-           frame (fetch_count * BYTES_PER_GAUSSIAN), cycles, skip rate, PSNR, hardware SSIM;
+           T=16), Full Co-Design (cache_bypass=0) at T=1 (lossless knee), T=3 and T=16.
+           Modeled External DRAM Traffic per frame (fetch_count * BYTES_PER_GAUSSIAN), 8-frame
+           and steady-state (frames 1-7) averages, cycles, skip rate, PSNR, hardware SSIM;
            writes bandwidth_profile.csv / .json / .md
 """
 import argparse
@@ -37,7 +38,9 @@ Q_FRACS = (8, 12)
 THRESHOLDS = (0, 1, 2, 3, 4, 8, 16, 32, 64)
 PROFILE_WAYS = 4
 # (mode, cache_bypass, MOTION_THRESH)
-PROFILE_MODES = (("Baseline", 1, 0), ("Skip-Only", 1, 16), ("Full Co-Design", 0, 16))
+PROFILE_MODES = (("Baseline", 1, 0), ("Skip-Only", 1, 16), ("Full Co-Design", 0, 1),
+                 ("Full Co-Design", 0, 3), ("Full Co-Design", 0, 16))
+STEADY_FRAMES = slice(1, None)  # frame 0 is the cold-cache start
 
 
 def run(cmd, log, timeout=1800):
@@ -101,7 +104,7 @@ def point(q_frac, thresh, frame_bin, ssim_bin):
 
 
 def profile_point(q_frac, mode, bypass, thresh, frame_bin, ssim_bin):
-    out = BW_OUT / f"q{q_frac}_{mode.lower().replace(' ', '_').replace('-', '_')}"
+    out = BW_OUT / f"q{q_frac}_{mode.lower().replace(' ', '_').replace('-', '_')}_t{thresh}"
     out.mkdir(parents=True, exist_ok=True)
     text = run([frame_bin, f"+thresh={thresh}", f"+bypass={bypass}", f"+out={out}"], out / "frame.log")
     res = result_of(text, out / "frame.log")
@@ -111,6 +114,14 @@ def profile_point(q_frac, mode, bypass, thresh, frame_bin, ssim_bin):
     res["skip_eligible_rate"] = res["skip_eligible"] / res["transactions"]
     res["dram_read_bytes_per_frame"] = res["dram_read_bytes"] / res["frames"]
     res["dram_read_bytes_conservative_per_frame"] = res["dram_read_bytes_conservative"] / res["frames"]
+    served = [int(n) for n in re.findall(r"^bandwidth frame_\d+: .*cache_served=(\d+)", text, re.M)]
+    assert len(served) == res["frames"] and sum(served) == res["cache_served"]
+    cons = [f * res["bytes_per_gaussian"] + s * res["served_bytes_per_gaussian"]
+            for f, s in zip(res["frame_fetch_count"], served)]
+    res["frame_dram_read_bytes_conservative"] = cons
+    steady = res["frame_dram_read_bytes"][STEADY_FRAMES]
+    res["steady_dram_read_bytes_per_frame"] = sum(steady) / len(steady)
+    res["steady_dram_read_bytes_conservative_per_frame"] = sum(cons[STEADY_FRAMES]) / len(steady)
     print(f"Q_FRAC={q_frac:2d} {mode:<14} bypass={bypass} T={thresh:2d}: fetch={res['fetch_count']} "
           f"dram_read_bytes/frame={res['dram_read_bytes_per_frame']:.1f} cycles={res['cycles']} "
           f"skip={100 * res['skip_rate']:.1f}% PSNR={res['psnr_db']:.2f} dB HW-SSIM={res['hw_ssim']:.5f} "
@@ -124,16 +135,24 @@ def write_profile(rows):
         r["read_reduction_pct"] = 100 * (1 - r["dram_read_bytes"] / base["dram_read_bytes"])
         r["read_reduction_conservative_pct"] = 100 * (1 - r["dram_read_bytes_conservative"]
                                                       / base["dram_read_bytes_conservative"])
+        for k in ("", "_conservative"):
+            r[f"steady_read_reduction{k}_pct"] = 100 * (1 - r[f"steady_dram_read_bytes{k}_per_frame"]
+                                                        / base[f"steady_dram_read_bytes{k}_per_frame"])
         r["speedup_vs_baseline"] = base["cycles"] / r["cycles"]
     keys = ["q_frac", "mode", "cache_bypass", "cache_ways", "motion_thresh", "frames", "transactions",
             "input_bits_per_gaussian", "bytes_per_gaussian", "served_bytes_per_gaussian", "skip_eligible",
             "skip_eligible_rate", "skipped", "skip_rate", "fetch_count", "cache_served", "dram_read_bytes",
             "dram_read_bytes_per_frame", "read_reduction_pct", "dram_read_bytes_conservative",
-            "dram_read_bytes_conservative_per_frame", "read_reduction_conservative_pct", "dram_write_bytes",
-            "frame_fetch_count", "frame_dram_read_bytes", "cycles", "speedup_vs_baseline", "psnr_db", "hw_ssim",
+            "dram_read_bytes_conservative_per_frame", "read_reduction_conservative_pct",
+            "steady_dram_read_bytes_per_frame", "steady_read_reduction_pct",
+            "steady_dram_read_bytes_conservative_per_frame", "steady_read_reduction_conservative_pct",
+            "dram_write_bytes", "frame_fetch_count", "frame_dram_read_bytes", "frame_dram_read_bytes_conservative",
+            "cycles", "speedup_vs_baseline", "psnr_db", "hw_ssim",
             "mismatches"]
     flat = [{**r, "frame_fetch_count": " ".join(map(str, r["frame_fetch_count"])),
-             "frame_dram_read_bytes": " ".join(map(str, r["frame_dram_read_bytes"]))} for r in rows]
+             "frame_dram_read_bytes": " ".join(map(str, r["frame_dram_read_bytes"])),
+             "frame_dram_read_bytes_conservative": " ".join(map(str, r["frame_dram_read_bytes_conservative"]))}
+            for r in rows]
     with open(BW_OUT / "bandwidth_profile.csv", "w", newline="", encoding="utf-8") as f:
         f.write("# Modeled External DRAM Traffic (fetch_count * BYTES_PER_GAUSSIAN), not measured "
                 "DRAM-controller traffic\n")
@@ -142,13 +161,16 @@ def write_profile(rows):
         w.writerows(flat)
     (BW_OUT / "bandwidth_profile.json").write_text(json.dumps(rows, indent=1) + "\n", encoding="utf-8")
     lines = ["Modeled External DRAM Traffic (not measured DRAM-controller traffic)", "",
-             "| Q_FRAC | Mode | cache_bypass | T | dram_read_bytes/frame | Reduction | dram_write_bytes | "
-             "Total cycles | Speedup | Skip rate | PSNR (dB) | HW SSIM |",
-             "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+             "| Q_FRAC | Mode | cache_bypass | T | dram_read_bytes/frame (8-frame) | Reduction | "
+             "Steady (frames 1-7) | Steady reduction | Conservative reduction (8-frame / steady) | "
+             "dram_write_bytes | Total cycles | Speedup | Skip rate | PSNR (dB) | HW SSIM |",
+             "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     lines += [f"| {r['q_frac']} | {r['mode']} | {r['cache_bypass']} | {r['motion_thresh']} | "
-              f"{r['dram_read_bytes_per_frame']:,.0f} | {r['read_reduction_pct']:.1f}% | 0 | {r['cycles']:,} | "
-              f"{r['speedup_vs_baseline']:.3f}x | {100 * r['skip_rate']:.1f}% | {r['psnr_db']:.2f} | "
-              f"{r['hw_ssim']:.5f} |" for r in rows]
+              f"{r['dram_read_bytes_per_frame']:,.0f} | {r['read_reduction_pct']:.1f}% | "
+              f"{r['steady_dram_read_bytes_per_frame']:,.0f} | {r['steady_read_reduction_pct']:.1f}% | "
+              f"{r['read_reduction_conservative_pct']:.1f}% / {r['steady_read_reduction_conservative_pct']:.1f}% | "
+              f"0 | {r['cycles']:,} | {r['speedup_vs_baseline']:.3f}x | {100 * r['skip_rate']:.1f}% | "
+              f"{r['psnr_db']:.4f} | {r['hw_ssim']:.5f} |" for r in rows]
     (BW_OUT / "bandwidth_profile.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print("\n".join(lines))
 
@@ -195,7 +217,7 @@ def main():
         write_profile(rows)
         bad = [r for r in rows if not r["pass_"]]
         for r in bad:
-            print(f"FAIL: Q_FRAC={r['q_frac']} {r['mode']}; see {BW_OUT}")
+            print(f"FAIL: Q_FRAC={r['q_frac']} {r['mode']} T={r['motion_thresh']}; see {BW_OUT}")
         return 1 if bad else 0
     bins = {q: build_frame(q, args.verilator) for q in Q_FRACS}
     points = [(12, 0), (8, 16)] if args.mode == "frame" else [(q, t) for q in Q_FRACS for t in THRESHOLDS]

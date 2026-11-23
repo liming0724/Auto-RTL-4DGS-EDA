@@ -107,6 +107,6 @@ eval_quality_4dgs:
 	$(PYTHON) scripts/dse/quality_sweep.py sweep --verilator "$(VERILATOR)" --jobs $(DSE_JOBS)
 
 # Phase 5a: bandwidth profiler (Modeled External DRAM Traffic), Q_FRAC {8,12} x
-# {Baseline, Skip-Only, Full Co-Design} -> build/4dgs/bandwidth/bandwidth_profile.{csv,json,md}.
+# {Baseline, Skip-Only, Full Co-Design T=1/3/16} -> build/4dgs/bandwidth/bandwidth_profile.{csv,json,md}.
 profile_bw_4dgs:
 	$(PYTHON) scripts/dse/quality_sweep.py profile --verilator "$(VERILATOR)" --jobs $(DSE_JOBS)
