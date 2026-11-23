@@ -157,13 +157,42 @@ checks `pre.blif` against the mapped and the optimized netlists.
   latches are removed. The overhead is net of that.
 * **Not comparable to Phase 5a.** Do not compare against the Phase 5a 50 910-gate figure.
 
-TIER2_BIG_PLACEHOLDER
+**Required configuration: NUM_PE=2, CACHE_WAYS=4, Q_FRAC=12 (local Yosys 0.23).**
 
-| Design (NUM_PE=1, CACHE_WAYS=2, Q_FRAC=8, CI configuration) | Generic gates | Flip-flops | AIG ANDs | AIG levels | CEC |
+| Design | Generic gates | Flip-flops | AIG ANDs | AIG levels | CEC |
 |---|---|---|---|---|---|
-| `gs4d_accelerator_top` (bare) | 50 639 | 2 279 | 60 769 | 335 | PASS |
-| `gs4d_axi_wrapper` (wrapper + top) | 51 661 | 2 552 | 61 344 | 345 | PASS |
-| Overhead | +1 022 (+2.02 %) | +273 | +575 | +10 | |
+| `gs4d_accelerator_top` (bare) | 98 643 | 3 997 | 118 508 | 425 | running |
+| `gs4d_axi_wrapper` (wrapper + top) | 98 334 | 4 334 | 117 611 | 420 | running |
+| Overhead | -309 (-0.31 %) | +337 | -897 | -5 | |
+
+* **Negative gate overhead.** The +337 flip-flops are mostly `meta_q`, plus `dr_q`, `axi_err`
+  and the wrapper state. They cost fewer gates than the split mode removes from the top: the
+  unused Channel B input ports and their capture logic, the dead `mu0x_q`/`s0x_q`/... latches,
+  and the generic-cell mapping effects of that smaller cone.
+* **CEC runtime.** At this configuration CEC takes more than the 7 200 s limit of the
+  `gs4d_flow` run per design. The ABC mapping takes about 35 min. CEC was therefore rerun
+  without a limit. Those reruns are still in progress; the result will be added here.
+
+**CI configuration: NUM_PE=1, CACHE_WAYS=2, Q_FRAC=8.**
+
+| Toolchain | Bare top gates / FFs / AIG / levels | Wrapper + top gates / FFs / AIG / levels | Overhead | CEC |
+|---|---|---|---|---|
+| Local (Yosys 0.23) | 50 639 / 2 279 / 60 769 / 335 | 51 661 / 2 552 / 61 344 / 345 | +1 022 gates (+2.02 %), +273 FFs | PASS / PASS |
+| CI (ubuntu-24.04 apt Yosys) | 49 019 / 2 279 / 61 029 / 348 | 49 911 / 2 552 / 61 812 / 351 | +892 gates (+1.82 %), +273 FFs | PASS / PASS |
+
+**Legacy (`SPLIT_FETCH=0`) netlist vs base `af43f4c`.** Same configuration and toolchain:
+
+| | Generic gates | Flip-flops | AIG ANDs | AIG levels |
+|---|---|---|---|---|
+| Base `af43f4c` | 50 910 | 2 275 | 61 125 | 336 |
+| This PR, `SPLIT_FETCH=0` | 50 639 | 2 279 | 60 769 | 335 |
+
+* **Cause of the difference.** The explicit `S_ATTR` case item restructures Yosys's decode of
+  the state register. The +4 flip-flops are one extra `state` bit, registered
+  `in_ready`/`out_valid` decodes and one internal adder bit. The −271 gates
+  (−0.53 %) are mapping noise from that change.
+* **Behaviour is unchanged.** `make sim_4dgs` (bit-true, 0 mismatches) and the 45/45
+  `formal_4dgs` obligations both pass on this netlist.
 
 ## Tier 3: formal (`make formal_4dgs_axi`, plus the `make formal_4dgs` regression)
 
@@ -254,7 +283,9 @@ The baseline job keeps the `make formal_4dgs` 45-obligation regression.
   `AXI_SYNTH`).
 * **Local runtime of the reduced configuration.** 16 min wall-clock for both designs, CEC
   included.
-* **CI runtime.** CI_RUNTIME_PLACEHOLDER
+* **CI runtime.** The `axi_split_fetch` job takes 27 min: tool install about 6 min,
+  `sim_4dgs_axi` 2 min, `formal_4dgs_axi` (Tier 2 + Tier 3) 18 min. The baseline job is
+  unchanged.
 
 ## Out of scope (Phase 5d, deferred)
 
