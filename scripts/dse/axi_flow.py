@@ -161,6 +161,8 @@ def main():
     ap.add_argument("--sv2v", default="sv2v")
     ap.add_argument("--abc", default="berkeley-abc")
     args = ap.parse_args()
+    if args.action == "synth" and 4 % args.num_pe:  # TILE=4 pixels are shaded TILE/NUM_PE cycles x NUM_PE lanes
+        ap.error(f"--num-pe {args.num_pe} does not divide TILE=4")
     (sim if args.action == "sim" else synth)(args)
 
 
