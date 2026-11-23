@@ -97,7 +97,9 @@ inline std::vector<Gauss> make_scene(SceneMode mode = SceneMode::kBenign, uint64
     if (g.moving) {
       // Motion amplitude log-uniform from ~0.002 px to 12 px over t in [0, 1) (up to
       // ~1.5 px/frame), so every MOTION_THRESH in the sweep separates some Gaussians;
-      // curvature, scale and rotation drift scale with it.
+      // curvature, scale and rotation drift scale with it. Fast: the linear term is
+      // log-uniform 1.5-8 px/frame; with curvature, individual frame steps span ~0.8-11 px
+      // (91.6% inside 1.5-8), median ~3.7 px/frame (median_step_px is the scene metric).
       const double u = urand(s, 0.0, 3.8);
       const double sp = mode == SceneMode::kFast
                             ? kFrameCount * kFastMinStep * std::pow(kFastMaxStep / kFastMinStep, u / 3.8)

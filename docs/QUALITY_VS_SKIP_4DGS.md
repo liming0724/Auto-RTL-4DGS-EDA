@@ -320,7 +320,7 @@ RTL get the same transaction list, and the rendering math is unchanged.
 |---|---|---:|
 | benign | Phase 4/5a scene: 60% static; moving amplitude log-uniform 0.002–12 px over the sequence | 0.0139 px/frame |
 | pan | benign + uniform camera pan on **every** Gaussian along (0.8, 0.6): step ramps 2 → 4 px/frame (frame 0→1: 2 px, frame 6→7: 4 px; 21 px total). Implemented as extra `c1, c2` terms in mu(t), so the deformation engine sees it | 3.00 px/frame |
-| fast | benign split (60% static), but moving speed log-uniform **1.5–8 px/frame**; curvature scales with speed; scale/rho drift capped at the benign maximum | 3.69 px/frame |
+| fast | benign split (60% static), but the moving linear term is log-uniform **1.5–8 px/frame**; curvature scales with speed, so individual frame steps span 0.82–11.2 px (91.6% inside 1.5–8; 5th–95th percentile 1.57–8.01); scale/rho drift capped at the benign maximum | 3.69 px/frame |
 
 Median step = median |mu(t<sub>k+1</sub>) − mu(t<sub>k</sub>)| over the Gaussians that move
 (`median_step_px`). The benign value is lower than the ~0.019 px/frame linear-term figure
