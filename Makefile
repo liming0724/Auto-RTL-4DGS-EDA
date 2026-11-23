@@ -127,11 +127,14 @@ conic_cliff_4dgs:
 sim_4dgs_axi:
 	$(PYTHON) scripts/dse/axi_flow.py sim --verilator "$(VERILATOR)" --jobs $(DSE_JOBS)
 
-# Tier 2: generic-cell synthesis + CEC, wrapper and bare top at NUM_PE=2, CACHE_WAYS=4, Q_FRAC=12.
-synth_4dgs_axi: sim_4dgs_axi
-	$(PYTHON) scripts/dse/axi_flow.py synth $(G4_TOOLS)
+# Tier 2: generic-cell synthesis + CEC of the wrapper and the bare top at the same configuration,
+# by default NUM_PE=2, CACHE_WAYS=4, Q_FRAC=12 (about 2.5 h of ABC + CEC; CI overrides AXI_SYNTH
+# with the NUM_PE=1, CACHE_WAYS=2, Q_FRAC=8 synth_4dgs configuration to fit its 120-minute limit).
+AXI_SYNTH ?= --num-pe 2 --q-frac 12 --cache-ways 4
+synth_4dgs_axi:
+	$(PYTHON) scripts/dse/axi_flow.py synth $(AXI_SYNTH) $(G4_TOOLS)
 
 # Tier 3: composed wrapper + top (Q_FRAC=4) Z3 obligations (30 s breaker, COI slicing, BMC-20).
-formal_4dgs_axi: synth_4dgs_axi build_eda
+formal_4dgs_axi: build_eda
 	$(PYTHON) scripts/formal/rtl_to_netlist.py gs4d_axi --check $(FORMAL_TOOLS)
 	$(PYTHON) scripts/formal/verify_z3_4dgs_axi.py

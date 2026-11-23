@@ -122,13 +122,14 @@ def sim(args):
 
 
 def synth(args):
-    out = OUT / f"synth_{gs4d_flow.tag(SYNTH_CFG)}"
+    cfg = dict(num_pe=args.num_pe, q_frac=args.q_frac, cache_ways=args.cache_ways, cache_sets=args.cache_sets)
+    out = OUT / f"synth_{gs4d_flow.tag(cfg)}"
     jobs = {"wrapper": (WRAPPER, WRAP_FILES), "top": (gs4d_flow.TOP, gs4d_flow.RTL_FILES)}
     with ThreadPoolExecutor(2) as pool:
-        futures = {k: pool.submit(gs4d_flow.synth, SYNTH_CFG, out / k, args, top, files)
+        futures = {k: pool.submit(gs4d_flow.synth, cfg, out / k, args, top, files)
                    for k, (top, files) in jobs.items()}
         stats = {k: f.result() for k, f in futures.items()}
-    rep = {"config": SYNTH_CFG, "note": "Yosys/ABC generic-cell (AND/OR/XOR/MUX) metrics, not a 130nm library mapping"}
+    rep = {"config": cfg, "note": "Yosys/ABC generic-cell (AND/OR/XOR/MUX) metrics, not a 130nm library mapping"}
     for k, s in stats.items():
         rep[k] = dict(generic_gates=s["mapped"]["generic_gates"], flip_flops=s["mapped"]["flip_flops"],
                       aig_and=s["optimized"]["and_nodes"], aig_levels=s["optimized"]["levels"], cec=s["cec"])
@@ -139,7 +140,7 @@ def synth(args):
     (out / "axi_synth.json").write_text(json.dumps(rep, indent=2) + "\n", encoding="utf-8")
     for k in ("top", "wrapper"):
         r = rep[k]
-        print(f"synth {k} {gs4d_flow.tag(SYNTH_CFG)} (generic-cell): gates={r['generic_gates']} ffs={r['flip_flops']} "
+        print(f"synth {k} {gs4d_flow.tag(cfg)} (generic-cell): gates={r['generic_gates']} ffs={r['flip_flops']} "
               f"aig_and={r['aig_and']} aig_levels={r['aig_levels']} CEC {r['cec']}")
     o = rep["overhead"]
     print(f"wrapper overhead (wrapper+top - top, generic-cell): {o['generic_gates']} gates ({o['pct']:.2f}%), "
@@ -151,6 +152,10 @@ def main():
     ap.add_argument("action", choices=("sim", "synth"))
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--fast-abc", action="store_true")
+    ap.add_argument("--num-pe", type=int, default=SYNTH_CFG["num_pe"])
+    ap.add_argument("--q-frac", type=int, default=SYNTH_CFG["q_frac"])
+    ap.add_argument("--cache-ways", type=int, default=SYNTH_CFG["cache_ways"])
+    ap.add_argument("--cache-sets", type=int, default=SYNTH_CFG["cache_sets"])
     ap.add_argument("--verilator", default="verilator")
     ap.add_argument("--yosys", default="yosys")
     ap.add_argument("--sv2v", default="sv2v")

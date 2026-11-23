@@ -139,7 +139,31 @@ table. The MEASURED skip rate is the golden skip fraction of this run, which equ
 
 ## Tier 2: synthesis and CEC (`make synth_4dgs_axi`)
 
-Pending: the wrapper and bare-top synthesis at NUM_PE=2, CACHE_WAYS=4, Q_FRAC=12 is running.
+`scripts/dse/axi_flow.py synth` runs the Phase 5a `gs4d_flow.synth` flow on both designs at
+the identical configuration:
+
+* `gs4d_axi_wrapper`: the wrapper plus the top with `SPLIT_FETCH=1`.
+* `gs4d_accelerator_top`: the bare top, `SPLIT_FETCH=0`.
+
+The flow is sv2v, Yosys `synth` with the SRAM macro opaque, then ABC `-g AND,OR,XOR,MUX`. CEC
+checks `pre.blif` against the mapped and the optimized netlists.
+
+* **Metrics.** All numbers are **generic-cell** Yosys/ABC metrics, not a 130 nm library
+  mapping. Logic levels are ABC AIG levels after `aig.abc`.
+* **Overhead.** Overhead = (wrapper + top) - bare top. It includes the wrapper FSM and
+  `meta_q`, plus the top's `S_ATTR`, `needs_attr` and `dr_q`.
+* **What it nets against.** The split mode also removes logic: in split mode the top's
+  Channel B input ports are unused (tied 0 by the wrapper) and the dead `mu0x_q`/`s0x_q`/...
+  latches are removed. The overhead is net of that.
+* **Not comparable to Phase 5a.** Do not compare against the Phase 5a 50 910-gate figure.
+
+TIER2_BIG_PLACEHOLDER
+
+| Design (NUM_PE=1, CACHE_WAYS=2, Q_FRAC=8, CI configuration) | Generic gates | Flip-flops | AIG ANDs | AIG levels | CEC |
+|---|---|---|---|---|---|
+| `gs4d_accelerator_top` (bare) | 50 639 | 2 279 | 60 769 | 335 | PASS |
+| `gs4d_axi_wrapper` (wrapper + top) | 51 661 | 2 552 | 61 344 | 345 | PASS |
+| Overhead | +1 022 (+2.02 %) | +273 | +575 | +10 | |
 
 ## Tier 3: formal (`make formal_4dgs_axi`, plus the `make formal_4dgs` regression)
 
@@ -212,14 +236,24 @@ ID_W=4`.
 
 ## CI
 
-The new `axi_split_fetch` job in `.github/workflows/rtl-baseline.yml` runs `make sim_4dgs_axi`
-and `make formal_4dgs_axi` (synthesis, CEC, netlist, Z3) with `ABC=yosys-abc` and its own
-120-minute timeout.
+The `axi_split_fetch` job in `.github/workflows/rtl-baseline.yml` has its own 120-minute
+timeout. It runs, with `ABC=yosys-abc`:
 
-* **Why a separate job.** The Tier 2 configuration (`NUM_PE=2`, `Q_FRAC=12`,
-  `CACHE_WAYS=4`, two designs) would otherwise approach the baseline job's 120-minute limit.
-* **The baseline job** keeps the `make formal_4dgs` 45-obligation regression.
-* **Runtime.** Pending the first CI run.
+* `make sim_4dgs_axi`.
+* `make formal_4dgs_axi` (netlist + Z3).
+* `make synth_4dgs_axi AXI_SYNTH="--num-pe 1 --q-frac 8 --cache-ways 2"`: wrapper-vs-bare
+  synthesis and CEC at the `synth_4dgs` configuration.
+
+The baseline job keeps the `make formal_4dgs` 45-obligation regression.
+
+* **Why a reduced CI configuration.** Locally the `NUM_PE=2, CACHE_WAYS=4, Q_FRAC=12`
+  Tier 2 takes about 35 min of ABC mapping plus more than 85 min of CEC per design, with the
+  two designs in parallel. A first CI run with it in this job would have exceeded the
+  120-minute limit, so that configuration is a local `make synth_4dgs_axi` run (the default
+  `AXI_SYNTH`).
+* **Local runtime of the reduced configuration.** 16 min wall-clock for both designs, CEC
+  included.
+* **CI runtime.** CI_RUNTIME_PLACEHOLDER
 
 ## Out of scope (Phase 5d, deferred)
 
