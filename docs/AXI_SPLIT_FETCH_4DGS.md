@@ -213,13 +213,20 @@ checks `pre.blif` against the mapped and the optimized netlists.
 | Design | Generic gates | Flip-flops | AIG ANDs | AIG levels | CEC |
 |---|---|---|---|---|---|
 | `gs4d_accelerator_top` (bare) | 98 643 | 3 997 | 118 508 | 425 | PASS / PASS |
-| `gs4d_axi_wrapper` (wrapper + top) | 98 334 | 4 334 | 117 611 | 420 | PASS / PASS |
-| Overhead | -309 (-0.31 %) | +337 | -897 | -5 | |
+| `gs4d_axi_wrapper` (wrapper + top) | 98 661 | 4 274 | 117 533 | 419 | PASS / PASS |
+| Overhead | +18 (+0.02 %) | +277 | -975 | -6 | |
+| Before Phase 5e: wrapper + top | 98 334 | 4 334 | 117 611 | 420 | PASS / PASS |
+| Before Phase 5e: overhead | -309 (-0.31 %) | +337 | -897 | -5 | |
 
-* **Negative gate overhead.** The +337 flip-flops are mostly `meta_q`, plus `dr_q`, `axi_err`
-  and the wrapper state. They cost fewer gates than the split mode removes from the top: the
-  unused Channel B input ports and their capture logic, the dead `mu0x_q`/`s0x_q`/... latches,
-  and the generic-cell mapping effects of that smaller cone.
+* **Phase 5e shift.** Dropping the dead `S_ATTR` writes removes 60 wrapper flip-flops (48 at
+  the CI configuration) and 78 optimized AIG ANDs. The mapped generic-gate count rises by 327:
+  ABC `-g AND,OR,XOR,MUX` mapping of the changed cone, not added logic (the AIG is smaller).
+  The bare top (`SPLIT_FETCH=0`, `S_ATTR` unreachable) is identical.
+
+* **Near-zero gate overhead.** The +277 flip-flops (+337 before Phase 5e) are mostly `meta_q`, plus `dr_q`, `axi_err`
+  and the wrapper state. They cost about as many gates as the split mode removes from the top:
+  the unused Channel B input ports and their capture logic, the constant-0 `mu0x_q`/`s0x_q`/...
+  registers, and the generic-cell mapping effects of that smaller cone.
 * **CEC runtime.** At this configuration CEC takes more than the 7 200 s limit of the
   `gs4d_flow` run per design. The ABC mapping takes about 35 min. CEC was therefore rerun
   with ABC `&cec`, on the same `pre.blif`, `mapped.blif` and `optimized.blif`
