@@ -26,7 +26,7 @@ FORMAL_TOOLS = --yosys "$(YOSYS)" --sv2v "$(SV2V)" --abc "$(ABC)"
 
 .PHONY: lint lint_ssim lint_gs sim sim_ssim sim_gs synth_baseline cec_baseline build_eda formal_netlists formal_z3 test_cegar \
 	sim_4dgs synth_4dgs formal_4dgs dse_4dgs sim_4dgs_frame eval_quality_4dgs profile_bw_4dgs stress_4dgs conic_cliff_4dgs \
-	sim_4dgs_axi synth_4dgs_axi formal_4dgs_axi prove_products
+	sim_4dgs_axi synth_4dgs_axi formal_4dgs_axi prove_products mutants_gs
 lint: lint_ssim lint_gs
 
 lint_ssim:
@@ -49,7 +49,29 @@ sim_ssim: lint_ssim $(BUILD)/ssim/Vssim_sim_top
 	$(BUILD)/ssim/Vssim_sim_top $(SSIM)/gt.txt $(SSIM)/img.txt $(SIM)/ssim_golden.txt
 
 sim_gs: lint_gs $(BUILD)/gs/Vgs_sim_top
-	cd $(BUILD)/gs && ./Vgs_sim_top
+	cd $(BUILD)/gs && ./Vgs_sim_top && ./Vgs_sim_top +directed
+
+# Mutation check for the directed GS vector: each mutant of GS_RASTERIZER_pipeline.v
+# must still pass the regular scene and fail the +directed vector.
+#   clamp: alpha_i_s8_next = s7_mult0_z (no 0.99 clamp at stage 7)
+#   tail:  tail_crossed dropped from the stage-10 RGB/depth gate
+GS_MUT_clamp := s/alpha_i_s8_next = s7_alpha_clamp ? 32'h3F7D70A4 : s7_mult0_z;/alpha_i_s8_next = s7_mult0_z;/
+GS_MUT_tail := s/beta_positive_3_s10 || tail_crossed || s10_altb))/beta_positive_3_s10 || s10_altb))/
+mutants_gs: sim_gs
+	@set -e; for m in clamp tail; do \
+	  d=$(BUILD)/gs_mut_$$m; rm -rf $$d; mkdir -p $$d; \
+	  case $$m in clamp) e="$(GS_MUT_clamp)";; tail) e="$(GS_MUT_tail)";; esac; \
+	  sed "$$e" $(GS)/GS_RASTERIZER_pipeline.v > $$d/GS_RASTERIZER_pipeline.v; \
+	  test "$$(diff $(GS)/GS_RASTERIZER_pipeline.v $$d/GS_RASTERIZER_pipeline.v | grep -c '^>')" = 1 || \
+	    { echo "mutant $$m: expected exactly one changed line"; exit 1; }; \
+	  $(VERILATOR) $(VERILATOR_BUILD) $(GS_LINT) $(GS_INC) --top-module gs_sim_top --Mdir $$d/obj \
+	    -CFLAGS "-std=c++17 -I$(abspath ref_model/include)" $$d/GS_RASTERIZER_pipeline.v \
+	    $(filter-out $(GS)/GS_RASTERIZER_pipeline.v,$(GS_RTL)) $(abspath $(SIM)/sim_main_gs.cpp) > $$d/build.log 2>&1 || \
+	    { cat $$d/build.log; exit 1; }; \
+	  cd $$d/obj && ./Vgs_sim_top || { echo "mutant $$m: regular scene must still pass"; exit 1; }; \
+	  if ./Vgs_sim_top +directed; then echo "mutant $$m: SURVIVED the directed vector"; exit 1; fi; \
+	  echo "mutant $$m: killed by the directed vector"; cd - > /dev/null; \
+	done
 
 synth_baseline: sim
 	$(PYTHON) scripts/synth/baseline.py synth --yosys "$(YOSYS)" --abc "$(ABC)" --sv2v "$(SV2V)"

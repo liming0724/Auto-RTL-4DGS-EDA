@@ -30,6 +30,8 @@ jobs:
           "$RUNNER_TEMP/venv/bin/pip" install z3-solver==5.4.1.0 pybind11==2.13.6 numpy==2.2.6
       - name: Lint, simulate, synthesize, and prove equivalence
         run: make -j2 cec_baseline
+      - name: GS directed-vector mutation check
+        run: make mutants_gs
       - name: Z3 formal checks and CEGAR self-test
         run: make test_cegar PYTHON="$RUNNER_TEMP/venv/bin/python"
       - name: 4DGS lint and bit-true simulation

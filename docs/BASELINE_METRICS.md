@@ -94,6 +94,7 @@ incomplete case. Other warnings remain fatal.
 | --- | ---: | --- | --- |
 | `sim_ssim` | 10,000 | 6,800 packed binary16 scores and 6,800 nine-tap windows | Pass, 0 mismatches |
 | `sim_gs` | 432,919 total; 431,792 for the checked frame | 2,550 bit-exact pixels and 2,551 cycle-exact, address-checked write strobes | Pass, 0 mismatches |
+| `sim_gs` `+directed` | 2,796,453 total; 2,796,410 for the checked frame | Same checks on the directed alpha-clamp / post-crossing vector, plus 2 stage-7 clamps and 1 post-`s10_altb` stage-10 entry at pixel 0 | Pass, 0 mismatches |
 
 SSIM repeats the checked-in `gt.txt` / `img.txt` frame through the actual input
 SRAMs. The test checks output-valid every cycle. A separate shift-window
