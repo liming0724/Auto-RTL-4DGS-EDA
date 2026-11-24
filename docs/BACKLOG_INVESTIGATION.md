@@ -206,7 +206,7 @@ one 3DGS rule that covers all colour and depth accumulators; T and N still inclu
 
 **Proposed fix (report only):** the `rgb_stop_tail` flag from item 1.
 - Coverage: one lab-vector pixel exercises the rule. Before relying on it beyond pixel 0, add a
-  directed Verilator vector: a tile with 3 Gaussians of alpha 0.9 / 0.995 / 0.5 on one pixel,
+  directed Verilator vector (done; see "Directed GS vector" below for the 6-Gaussian version): a tile with 3 Gaussians of alpha 0.9 / 0.995 / 0.5 on one pixel,
   with `sticky_early` irrelevant at pixel 0. Expected RTL depth = the sum of all three terms
   (MODELED).
 
@@ -343,5 +343,40 @@ GS Tier 2 (generic-cell, Yosys 0.23 + Berkeley ABC, `make cec_baseline`), before
 631 -> 797 pre-map gates, 580 -> 668 mapped gates, 2732 -> 2733 FFs, 49 -> 49 opaque, 564 -> 651 /
 542 -> 629 AIG ANDs, 12 -> 15 levels, CEC PASS. These are generic-cell metrics, not 130 nm figures.
 
-Not done: the directed 3-Gaussian vector proposed in item 2 (pixel 0 of the lab scene is still
-the only pixel where the RTL crosses, because of `sticky_early`).
+## Directed GS vector (PR #14 review A2; MEASURED, base `main` @ `1cf7494`)
+
+Before this vector the clamp and `tail_crossed` were invisible to Tier 1: with either removed,
+`make sim_gs` still passed with 0 mismatches and `run_golden.sh` reported 0 pixels.
+
+`make sim_gs` now also runs `Vgs_sim_top +directed` (`sim_main_gs.cpp`, `directed_scene`). The
+item 2 proposal (3 Gaussians, alpha 0.9 / 0.995 / 0.5) does not cross in the RTL: with
+`stale_trans`, stage 8 reads T from two Gaussians back, so `T_test_k = (1 - a_k) T_test_{k-2}` and
+the third Gaussian only reaches `T_test` ~ 1e-4. The vector therefore uses six Gaussians on pixel 0
+(x 975, y 34), all at dx = 0.5, dy = 0 (exp(beta) ~ 0.99875), then alpha-too-small filler:
+
+| Gaussian | conw | alpha at stage 8 | `T_test` | Role |
+|---|---:|---:|---:|---|
+| G1 | 1.5 | 0.99 (clamped) | 0.01 | clamp |
+| G2 | 0.9 | 0.899 | 0.1 | |
+| G3 | 0.9 | 0.899 | 1e-3 | |
+| G4 | 0.5 | 0.499 | 0.05 | |
+| G5 | 0.995 | 0.99 (clamped) | 1e-5 | clamp; `s10_altb` (T < 1e-4) |
+| G6 | 0.5 | 0.499 | 0.025 | valid stage-10 entry one cycle after `s10_altb`, gated only by `tail_crossed` |
+
+The C++ reference is still `RtlRasterizer` (q111), checked bit-exact on all 2550 pixels and 2551
+write strobes. The harness also checks:
+- in the model: pixel 0 has N = 6; `alpha_clamp` off changes its T; `rgb_stop_tail` +
+  `depth_stop_tail` on changes its RGB and depth;
+- in the RTL, through probes in `gs_sim_top.sv`, during pixel 0: exactly 2 stage-7 clamp
+  events, and exactly 1 committed stage-10 entry in PROCESS one cycle after an `s10_altb` entry.
+
+`make mutants_gs` (also a CI step) builds each mutant from a one-line `sed` of
+`GS_RASTERIZER_pipeline.v`. The regular scene must still pass and `+directed` must fail:
+
+| Mutant | Regular scene | `+directed` |
+|---|---|---|
+| clamp: `alpha_i_s8_next = s7_mult0_z;` (:781) | GS PASS, 0 mismatches | FAIL at cycle 19: first write latency (unclamped G1 makes T negative, so pixel 0 stops early) |
+| tail: `tail_crossed` dropped from the stage-10 gate (:347) | GS PASS, 0 mismatches | FAIL at cycle 46: pixel 0 RGB/D `efdb6c/40a48cde` != `e9d567/409ee327` (G6 blended) |
+
+`make sim`: SSIM PASS; GS PASS 432919 cycles (unchanged); GS directed PASS 2796453 total cycles,
+2550 bit-exact pixels, 2551 write strobes, 0 mismatches.

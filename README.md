@@ -77,6 +77,7 @@ make build_eda           # eda_core/Makefile: -O3 -std=c++17 -fPIC, output in bu
 make lint
 make -j2 sim             # or sim_ssim / sim_gs
 make -j2 cec_baseline    # runs simulation, generic synthesis, then ABC CEC
+make mutants_gs          # GS clamp / tail_crossed mutants must fail the directed vector
 make formal_z3           # Tier 3: Z3 proofs with 30 s / 3-retry / COI / BMC-20 breakers
 make test_cegar          # injected fault -> Z3 SAT -> cegar_trace.hex -> Verilator FAIL
 
