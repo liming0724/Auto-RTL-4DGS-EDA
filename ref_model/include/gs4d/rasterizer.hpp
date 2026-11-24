@@ -346,7 +346,7 @@ RenderResult<typename P::V> render_ideal(const P& p, const std::vector<Splat<typ
   const V one_t = p.cst(k::kOne, Sig::kTrans), one_a = p.cst(k::kOne, Sig::kAlpha);
   const V m_half = p.cst(k::kMinusHalf, Sig::kPower), alpha_min = p.cst(k::kAlphaMin, Sig::kAlpha);
   const V t_min = p.cst(k::kTMin, Sig::kTrans), bg_depth = p.cst(k::kBgDepth, Sig::kDepth);
-  const V cscale = p.cst(k::kColorScale, Sig::kPixel);
+  const V cscale = p.cst(k::kColorScale, Sig::kPixel), alpha_max = p.cst(k::kAlphaMax, Sig::kAlpha);
   for (int py = 0; py < tc.height; ++py) {
     for (int px = 0; px < tc.width; ++px) {
       const V fpx = p.from_uint((px + tc.px_offset) & 0x7FF, Sig::kCoord);
@@ -367,16 +367,17 @@ RenderResult<typename P::V> render_ideal(const P& p, const std::vector<Splat<typ
         const V beta = p.sub(p.mul(p.add(bt1, bt2, Sig::kPower), m_half, Sig::kPower), bt3, Sig::kPower);
         const V dsum = p.add(p.mul(dx, ds1, Sig::kDepth), p.mul(dy, ds2, Sig::kDepth), Sig::kDepth);
         const V di = p.sub(d.depth, dsum, Sig::kDepth);
-        const V alpha = p.mul(d.conw, p.exp(beta, Sig::kAlpha), Sig::kAlpha);
+        V alpha = p.mul(d.conw, p.exp(beta, Sig::kAlpha), Sig::kAlpha);
+        if (p.lt(alpha_max, alpha)) alpha = alpha_max;
         if (!p.sign(beta) || p.lt(alpha, alpha_min)) continue;
         const V tacc = p.mul(alpha, T, Sig::kTrans);
         const V ttest = p.mul(p.sub(one_a, alpha, Sig::kAlpha), T, Sig::kTrans);
+        if (p.lt(ttest, t_min)) { T = ttest; break; }  // the crossing Gaussian is not blended
         red = p.add(red, p.mul(tacc, d.red, Sig::kColor), Sig::kColor);
         green = p.add(green, p.mul(tacc, d.green, Sig::kColor), Sig::kColor);
         blue = p.add(blue, p.mul(tacc, d.blue, Sig::kColor), Sig::kColor);
         depth = p.add(depth, p.mul(tacc, di, Sig::kDepth), Sig::kDepth);
         T = ttest;
-        if (p.lt(T, t_min)) break;
       }
       auto& o = res.pixels[py * tc.width + px];
       o.rgb = ((p.to_uint(p.mul(red, cscale, Sig::kPixel), 9) & 0xFF) << 16) |

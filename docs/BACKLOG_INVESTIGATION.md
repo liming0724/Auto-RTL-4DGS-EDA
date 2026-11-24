@@ -334,6 +334,11 @@ Toolchain as above, except Z3 5.4.1 (the pinned CI version) and Berkeley ABC for
 | 3 | `rtl_to_netlist.py`: `setattr -set keep 1 t:SRAM_*` before `synth`, as in Tier 2. | Tier 3 GS: 49 opaque cells (was 48). Keep alone on the `b86da86` RTL: 2729 FFs, 49 cuts (FF count unchanged). With the item 1 RTL: 2730 FFs (+1 `tail_crossed`) vs Tier 2 2733; the 3-FF gap is still `-nofsm`. |
 | 4 | `prove_products_exhaustive.py` (from PR #13 `a9b180e`, with `check_leaves`) + `make prove_products` + a CI step in the `baseline` job (numpy 2.2.6 added to the venv). | `self-test: inverted XOR prod[12] -> 16777216 mismatches (19.2s)`; `PASS: 10 products x 2^24 operand pairs = 167772160 checks, 0 mismatches (17.5s)`. |
 
+`render_ideal` (the hazard-free sequential reference) applies the same two rules: it clamps
+alpha and breaks before blending the crossing Gaussian (T still takes its `T_test`). Its
+`run_golden.sh` tolerance mismatches vs `golden_ans` drop from T 4 / D 1351 / RGB 70 (1460 px) to
+T 0 / D 705 / RGB 56 (1453 px); the rest is its N count and the RTL-only quirks it does not model.
+
 GS Tier 2 (generic-cell, Yosys 0.23 + Berkeley ABC, `make cec_baseline`), before -> after:
 631 -> 797 pre-map gates, 580 -> 668 mapped gates, 2732 -> 2733 FFs, 49 -> 49 opaque, 564 -> 651 /
 542 -> 629 AIG ANDs, 12 -> 15 levels, CEC PASS. These are generic-cell metrics, not 130 nm figures.
