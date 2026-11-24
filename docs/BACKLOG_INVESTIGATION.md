@@ -206,9 +206,9 @@ one 3DGS rule that covers all colour and depth accumulators; T and N still inclu
 
 **Proposed fix (report only):** the `rgb_stop_tail` flag from item 1.
 - Coverage: one lab-vector pixel exercises the rule. Before relying on it beyond pixel 0, add a
-  directed Verilator vector (done; see "Directed GS vector" below for the 6-Gaussian version): a tile with 3 Gaussians of alpha 0.9 / 0.995 / 0.5 on one pixel,
-  with `sticky_early` irrelevant at pixel 0. Expected RTL depth = the sum of all three terms
-  (MODELED).
+  directed Verilator vector. Superseded: the proposed tile (3 Gaussians of alpha 0.9 / 0.995 /
+  0.5 on pixel 0) never drives `T_test` below 1e-4 in the RTL, so it cannot exercise the rule.
+  The 6-Gaussian vector in "Directed GS vector" below replaces it.
 
 ## Item 3: GS opaque cells, Tier 3 = 48 vs Tier 2 = 49
 
@@ -351,7 +351,9 @@ Before this vector the clamp and `tail_crossed` were invisible to Tier 1: with e
 `make sim_gs` now also runs `Vgs_sim_top +directed` (`sim_main_gs.cpp`, `directed_scene`). The
 item 2 proposal (3 Gaussians, alpha 0.9 / 0.995 / 0.5) does not cross in the RTL: with
 `stale_trans`, stage 8 reads T from two Gaussians back, so `T_test_k = (1 - a_k) T_test_{k-2}` and
-the third Gaussian only reaches `T_test` ~ 1e-4. The vector therefore uses six Gaussians on pixel 0
+the third Gaussian only reaches `T_test` = 0.5 x 0.1 ~ 0.05 (q111 model: 0.0506). Even without the
+stage-8 T lag (`stale_trans` off) it would be 0.1 x 0.01 x 0.5 ~ 5e-4 (model: 5.06e-4), still
+above 1e-4. The vector therefore uses six Gaussians on pixel 0
 (x 975, y 34), all at dx = 0.5, dy = 0 (exp(beta) ~ 0.99875), then alpha-too-small filler:
 
 | Gaussian | conw | alpha at stage 8 | `T_test` | Role |
