@@ -69,7 +69,8 @@ LSB first. `W = 8 + Q_FRAC` (16 / 20), `ID_W = 12`, `COEF_W = 10W`.
   fields are consumed in the `S_ATTR` cycle itself through `b_* = attr_*`; `mu0x_q`/`mu0y_q`/
   `s0x_q`/`s0y_q`/`opa_q` are written only at ACCEPT (legacy fields, 0 in split mode) and read
   only through `b_*` outside `S_ATTR` (legacy LOOKUP). Phase 5e removed the five dead `S_ATTR`
-  writes (PR #10 review finding 3); before that, synthesis already removed them. Obligation 4c
+  writes (PR #10 review finding 3). Synthesis had kept those registers (48 FFs at the CI
+  configuration): their `S_ATTR` value is never observed, but only sequentially. Obligation 4c
   checks their consumers instead (`out_mean_*`, `out_opacity`, `sx_q`, `sy_q`, `proj_a/b`,
   `rho_q`).
 
@@ -202,8 +203,9 @@ checks `pre.blif` against the mapped and the optimized netlists.
 * **Overhead.** Overhead = (wrapper + top) - bare top. It includes the wrapper FSM and
   `meta_q`, plus the top's `S_ATTR`, `needs_attr` and `dr_q`.
 * **What it nets against.** The split mode also removes logic: in split mode the top's
-  Channel B input ports are unused (tied 0 by the wrapper) and the dead `mu0x_q`/`s0x_q`/...
-  latches are removed. The overhead is net of that.
+  Channel B input ports are unused (tied 0 by the wrapper), so `mu0x_q`/`s0x_q`/... stay 0
+  and are removed (since Phase 5e, which dropped their dead `S_ATTR` writes). The overhead is
+  net of that.
 * **Not comparable to Phase 5a.** Do not compare against the Phase 5a 50 910-gate figure.
 
 **Required configuration: NUM_PE=2, CACHE_WAYS=4, Q_FRAC=12 (local Yosys 0.23).**
@@ -229,8 +231,9 @@ checks `pre.blif` against the mapped and the optimized netlists.
 
 | Toolchain | Bare top gates / FFs / AIG / levels | Wrapper + top gates / FFs / AIG / levels | Overhead | CEC |
 |---|---|---|---|---|
-| Local (Yosys 0.23) | 50 639 / 2 279 / 60 769 / 335 | 51 661 / 2 552 / 61 344 / 345 | +1 022 gates (+2.02 %), +273 FFs | PASS / PASS |
-| CI (ubuntu-24.04 apt Yosys) | 49 019 / 2 279 / 61 029 / 348 | 49 911 / 2 552 / 61 812 / 351 | +892 gates (+1.82 %), +273 FFs | PASS / PASS |
+| Local (Yosys 0.23), Phase 5e | 50 639 / 2 279 / 60 769 / 335 | 51 613 / 2 504 / 61 271 / 344 | +974 gates (+1.92 %), +225 FFs | PASS / PASS |
+| Local (Yosys 0.23), before Phase 5e | 50 639 / 2 279 / 60 769 / 335 | 51 661 / 2 552 / 61 344 / 345 | +1 022 gates (+2.02 %), +273 FFs | PASS / PASS |
+| CI (ubuntu-24.04 apt Yosys), before Phase 5e | 49 019 / 2 279 / 61 029 / 348 | 49 911 / 2 552 / 61 812 / 351 | +892 gates (+1.82 %), +273 FFs | PASS / PASS |
 
 **Legacy (`SPLIT_FETCH=0`) netlist vs base `af43f4c`.** Same configuration and toolchain:
 
