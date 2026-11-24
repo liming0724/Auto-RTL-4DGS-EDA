@@ -213,7 +213,7 @@ checks `pre.blif` against the mapped and the optimized netlists.
 | Design | Generic gates | Flip-flops | AIG ANDs | AIG levels | CEC |
 |---|---|---|---|---|---|
 | `gs4d_accelerator_top` (bare) | 98 643 | 3 997 | 118 508 | 425 | PASS / PASS |
-| `gs4d_axi_wrapper` (wrapper + top) | 98 661 | 4 274 | 117 533 | 419 | `&cec` pending |
+| `gs4d_axi_wrapper` (wrapper + top) | 98 661 | 4 274 | 117 533 | 419 | PASS / PASS |
 | Overhead | +18 (+0.02 %) | +277 | -975 | -6 | |
 | Before Phase 5e: wrapper + top | 98 334 | 4 334 | 117 611 | 420 | PASS / PASS |
 | Before Phase 5e: overhead | -309 (-0.31 %) | +337 | -897 | -5 | |
@@ -232,7 +232,8 @@ checks `pre.blif` against the mapped and the optimized netlists.
   with ABC `&cec`, on the same `pre.blif`, `mapped.blif` and `optimized.blif`
   converted to AIGER (`read; strash; write_aiger`, then `&r pre.aig; &cec <other>.aig`).
   Both comparisons report "Networks are equivalent" for both designs: 29 min and 104 min for
-  the bare top, 102 min and 158 min for the wrapper.
+  the bare top, 102 min and 158 min for the wrapper. Phase 5e rerun: 29 min and 100 min for
+  the bare top, 76 min and 135 min for the wrapper, all equivalent.
 
 **CI configuration: NUM_PE=1, CACHE_WAYS=2, Q_FRAC=8.**
 
