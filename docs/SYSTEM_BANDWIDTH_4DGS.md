@@ -293,6 +293,23 @@ All numbers in the sections above are **MODELED** (counters x fixed byte sizes).
   | fast | 21.4 % (Q8 T=1) |
   | pan (adversarial) | 3.0 % (Q8 T=1) |
 
+* **In-band attribute ID sensitivity (MODELED).** The MEASURED numbers above carry the
+  attribute id on the 12-wire `s_axis_attr_tuser` sideband, which is not counted in `B_attr`.
+  If the id had to travel in-band, the attribute beat would be `ceil((6W + 12) / 8)` = 14 / 17 B
+  at Q8 / Q12. Applied to the MEASURED beat counts:
+
+  | Case | `tuser` sideband (MEASURED) | In-band ID (MODELED) |
+  |---|---|---|
+  | benign Q8 T=1 | 37.89 B, -21.1 % | 38.21 B, -20.4 % |
+  | benign Q12 T=1 | 46.61 B, -21.0 % | 46.96 B, -20.4 % |
+  | fast Q8 T=1 | 37.74 B, -21.4 % | 38.03 B, -20.8 % |
+  | pan Q8 T=1 | 46.56 B, -3.0 % | 48.32 B, **+0.7 %** (worse than the 48 B baseline) |
+  | pan Q12 T=1 | 57.20 B, -3.0 % | 58.96 B, -0.06 % |
+
+  * **Under thrashing (pan),** split fetch is break-even or a net loss if the id must travel
+    in-band.
+  * **On friendly scenes (benign, fast),** the headline of about 21 % is unaffected.
+
 * **The -90.4 % headline is not realized by split fetch.** It remains the **MODELED
   zero-cost skip-decision** figure, which charges a served Gaussian no input bytes. Split
   fetch still pays the metadata beat, which carries every input of the skip decision.

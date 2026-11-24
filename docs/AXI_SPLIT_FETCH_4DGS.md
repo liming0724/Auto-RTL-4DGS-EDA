@@ -30,8 +30,9 @@ LSB first. `W = 8 + Q_FRAC` (16 / 20), `ID_W = 12`, `COEF_W = 10W`.
   on the order-0 terms plus `coef` and `t`, and `temporal_skip_unit`. It also carries the
   cache tag (`gauss_id`) and the raster-lane pixel origin.
 * **`s_axis_attr_tuser`.** This `ID_W`-bit sideband carries the Channel B beat's `gauss_id`.
-  The wrapper checks it against the pending metadata id. It is not counted in `B_attr`; it
-  would add 1.5 B per attribute beat if it were sent in-band.
+  The wrapper checks it against the pending metadata id. It is not counted in `B_attr`, but
+  its 12 wires per attribute beat are real interconnect. Sent in-band, it would make
+  `B_attr` 14 / 17 B instead of 12 / 15 B; see "In-band attribute ID sensitivity" below.
 * **Unused top inputs.** The wrapper drives the top's Channel B inputs (`in_mu0_*`, `in_s0_*`,
   `in_rho`, `in_opacity`) to 0. In split mode the top takes those fields from `attr_data`.
 * **No `tlast`.** One beat is one Gaussian.
@@ -107,6 +108,30 @@ table. The MEASURED skip rate is the golden skip fraction of this run, which equ
 | benign | Q12 | 16 | 0.852 | 46.22 | 21.7 % | 0.8525 | 46.21 | 21.7 % | 59 |
 | pan | Q8 | 1 | 0.120 | 46.56 | 3.0 % | 0.1197 | 46.56 | 3.0 % | 48 |
 | fast | Q8 | 1 | 0.855 | 37.74 | 21.4 % | 0.8549 | 37.74 | 21.4 % | 48 |
+
+### In-band attribute ID sensitivity
+
+* **What changes.** If the attribute id had to travel in-band instead of on `tuser`, the
+  attribute beat would be `ceil((6W + 12) / 8)` = 14 B (Q8) / 17 B (Q12), up from 12 / 15 B.
+  Channel A (36 / 44 B) and the baseline (48 / 59 B) already carry the id in-band, so they
+  do not change.
+* **How it is computed.** The in-band column applies the 14 / 17 B attribute beat to the
+  **MEASURED** meta and attr beat counts of the Tier 1 runs (`axi_bandwidth.csv`). It is
+  therefore **MODELED**.
+
+| Scene | Q | T | MEASURED attr beats / Gaussians | `tuser` sideband avg B / reduction (MEASURED) | In-band ID avg B / change vs baseline (MODELED) | Baseline B |
+|---|---|---|---|---|---|---|
+| benign | Q8 | 1 | 23 410 / 148 360 | 37.89 / -21.06 % | 38.21 / -20.40 % | 48 |
+| benign | Q12 | 1 | 25 801 / 148 360 | 46.61 / -21.00 % | 46.96 / -20.41 % | 59 |
+| fast | Q8 | 1 | 20 808 / 143 367 | 37.74 / -21.37 % | 38.03 / -20.77 % | 48 |
+| pan | Q8 | 1 | 101 696 / 115 528 | 46.56 / -2.99 % | 48.32 / **+0.67 %** | 48 |
+| pan | Q12 | 1 | 101 696 / 115 528 | 57.20 / -3.04 % | 58.96 / -0.06 % | 59 |
+
+* **Thrashing (pan).** With an in-band id, split fetch is break-even (Q12, -0.06 %) or a net
+  loss (Q8, +0.67 %, above the 48 B baseline). With every Gaussian missing (T=0 or
+  `cache_bypass=1`), the in-band cost is 50 / 61 B, +4.2 % / +3.4 % over the baseline.
+* **Friendly scenes (benign, fast).** The headline of about 21 % is unaffected: the reduction
+  moves by at most 0.7 percentage points, to about 20.4–20.8 %.
 
 ### All runs (MEASURED AXI beats and bytes)
 
