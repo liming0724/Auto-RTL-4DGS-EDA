@@ -233,6 +233,7 @@ checks `pre.blif` against the mapped and the optimized netlists.
 |---|---|---|---|---|
 | Local (Yosys 0.23), Phase 5e | 50 639 / 2 279 / 60 769 / 335 | 51 613 / 2 504 / 61 271 / 344 | +974 gates (+1.92 %), +225 FFs | PASS / PASS |
 | Local (Yosys 0.23), before Phase 5e | 50 639 / 2 279 / 60 769 / 335 | 51 661 / 2 552 / 61 344 / 345 | +1 022 gates (+2.02 %), +273 FFs | PASS / PASS |
+| CI (ubuntu-24.04 apt Yosys), Phase 5e | 49 019 / 2 279 / 61 029 / 348 | 49 780 / 2 504 / 61 843 / 351 | +761 gates (+1.55 %), +225 FFs | PASS / PASS |
 | CI (ubuntu-24.04 apt Yosys), before Phase 5e | 49 019 / 2 279 / 61 029 / 348 | 49 911 / 2 552 / 61 812 / 351 | +892 gates (+1.82 %), +273 FFs | PASS / PASS |
 
 **Legacy (`SPLIT_FETCH=0`) netlist vs base `af43f4c`.** Same configuration and toolchain:
