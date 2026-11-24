@@ -65,8 +65,12 @@ LSB first. `W = 8 + Q_FRAC` (16 / 20), `ID_W = 12`, `COEF_W = 10W`.
   PROJ phase 0. The datapath (deform, skip, cache, projection, raster math) is unchanged.
 * **Legacy mode.** With `SPLIT_FETCH=0`, LOOKUP goes directly to PROJ, `attr_valid`/`attr_data`
   are ignored and `needs_attr = 0`. Yosys removes `dr_q`.
-* **Dead latches in split mode.** The `mu0x_q`/`mu0y_q`/`s0x_q`/`s0y_q`/`opa_q` latches are
-  written in `S_ATTR` but never read afterwards, so synthesis removes them. Obligation 4c
+* **No dead latches in split mode.** `S_ATTR` latches only `rho_q`. The other Channel B
+  fields are consumed in the `S_ATTR` cycle itself through `b_* = attr_*`; `mu0x_q`/`mu0y_q`/
+  `s0x_q`/`s0y_q`/`opa_q` are written only at ACCEPT (legacy fields, 0 in split mode) and read
+  only through `b_*` outside `S_ATTR` (legacy LOOKUP). Phase 5e removed the five dead `S_ATTR`
+  writes (PR #10 review finding 3). Synthesis had kept those registers (48 FFs at the CI
+  configuration): their `S_ATTR` value is never observed, but only sequentially. Obligation 4c
   checks their consumers instead (`out_mean_*`, `out_opacity`, `sx_q`, `sy_q`, `proj_a/b`,
   `rho_q`).
 
@@ -78,7 +82,18 @@ The testbench is `rtl_4dgs/sim/sim_main_4dgs_axi.cpp`, driven by `scripts/dse/ax
   per (Gaussian, 4-pixel span), as in the frame testbench.
 * **Configuration.** `CACHE_WAYS=4`, the Phase 5a profiling configuration.
 * **Runs.** `{benign, pan, fast} x Q_FRAC {8, 12} x T {0, 1, 16}` (18 runs), plus benign Q8 T=3
-  (a Part D row) and a `cache_bypass=1` smoke (Q8 T=16).
+  (a Part D row), a `cache_bypass=1` smoke (Q8 T=16), and since Phase 5e (PR #10 review
+  finding 2) three extra runs:
+  * `meta_slow` (`+meta_slow=8`), benign Q8 T=1 and pan Q12 T=1: the Channel A source raises
+    `tvalid` with probability 1/8 per cycle, so the wrapper waits on the source with
+    `s_axis_meta_tready = 1`. All normal checks apply, plus
+    `meta_stall_cycles >= Gaussians / 4`.
+  * `bad_tuser` (`+bad_tuser=100`), benign Q8 T=1: a negative run. Attribute beat 100 carries
+    `tuser = gauss_id ^ 1` and inverted `tdata`; the source then resends the correct beat. It is
+    an expected failure: it passes only if `axi_err` is 0 before that handshake and 1 on every
+    cycle after it (sticky), every output is still bit-true (the bad beat was not forwarded),
+    exactly one extra attribute beat was counted, and the normal checks fail. The run ends
+    when all outputs are done, so it cannot hang.
 * **Stalls.** LFSR-random stalls on metadata `tvalid`, on attribute `tvalid` (reactive, 0-3
   cycles after `tready`), and on `out_ready` (random single-cycle stalls plus bursts of up to
   20 cycles).
@@ -90,8 +105,18 @@ The testbench is `rtl_4dgs/sim/sim_main_4dgs_axi.cpp`, driven by `scripts/dse/ax
     (an independent prediction from the golden model).
   * MEASURED bytes equal the MODELED bytes within `B_meta + B_attr`.
   * `axi_err` stays 0. The run lasts at least 10 000 cycles.
-* **Result.** All 20 runs pass with 0 mismatches and `axi_err = 0`. MEASURED equals MODELED
-  bytes exactly in every run.
+* **Result.** All 23 runs pass. The 22 normal and `meta_slow` runs have 0 mismatches and
+  `axi_err = 0`, and MEASURED equals MODELED bytes exactly. The 20 Phase 5c runs reproduce their
+  Phase 5c numbers. MEASURED Channel A source stalls (`meta_stall_cycles`):
+
+  | Run | Gaussians | `meta_stall_cycles` | cycles | mismatches | `axi_err` cycles |
+  |---|---|---|---|---|---|
+  | 20 Phase 5c runs (default source, 3/4) | 115 528-148 360 | 0-14 per run | | 0 | 0 |
+  | `meta_slow` benign Q8 T=1 | 148 360 | 466 388 | 2 152 121 | 0 | 0 |
+  | `meta_slow` pan Q12 T=1 | 115 528 | 52 943 | 4 821 058 | 0 | 0 |
+  | `bad_tuser` benign Q8 T=1 | 148 360 | 7 | 1 880 412 | 0 | 1 820 471 (every cycle after the bad beat) |
+
+  Pan stalls less because its misses keep the top busy longer per Gaussian.
 
 ### Part D: MODELED prediction vs MEASURED
 
@@ -178,8 +203,9 @@ checks `pre.blif` against the mapped and the optimized netlists.
 * **Overhead.** Overhead = (wrapper + top) - bare top. It includes the wrapper FSM and
   `meta_q`, plus the top's `S_ATTR`, `needs_attr` and `dr_q`.
 * **What it nets against.** The split mode also removes logic: in split mode the top's
-  Channel B input ports are unused (tied 0 by the wrapper) and the dead `mu0x_q`/`s0x_q`/...
-  latches are removed. The overhead is net of that.
+  Channel B input ports are unused (tied 0 by the wrapper), so `mu0x_q`/`s0x_q`/... stay 0
+  and are removed (since Phase 5e, which dropped their dead `S_ATTR` writes). The overhead is
+  net of that.
 * **Not comparable to Phase 5a.** Do not compare against the Phase 5a 50 910-gate figure.
 
 **Required configuration: NUM_PE=2, CACHE_WAYS=4, Q_FRAC=12 (local Yosys 0.23).**
@@ -187,26 +213,36 @@ checks `pre.blif` against the mapped and the optimized netlists.
 | Design | Generic gates | Flip-flops | AIG ANDs | AIG levels | CEC |
 |---|---|---|---|---|---|
 | `gs4d_accelerator_top` (bare) | 98 643 | 3 997 | 118 508 | 425 | PASS / PASS |
-| `gs4d_axi_wrapper` (wrapper + top) | 98 334 | 4 334 | 117 611 | 420 | PASS / PASS |
-| Overhead | -309 (-0.31 %) | +337 | -897 | -5 | |
+| `gs4d_axi_wrapper` (wrapper + top) | 98 661 | 4 274 | 117 533 | 419 | PASS / PASS |
+| Overhead | +18 (+0.02 %) | +277 | -975 | -6 | |
+| Before Phase 5e: wrapper + top | 98 334 | 4 334 | 117 611 | 420 | PASS / PASS |
+| Before Phase 5e: overhead | -309 (-0.31 %) | +337 | -897 | -5 | |
 
-* **Negative gate overhead.** The +337 flip-flops are mostly `meta_q`, plus `dr_q`, `axi_err`
-  and the wrapper state. They cost fewer gates than the split mode removes from the top: the
-  unused Channel B input ports and their capture logic, the dead `mu0x_q`/`s0x_q`/... latches,
-  and the generic-cell mapping effects of that smaller cone.
+* **Phase 5e shift.** Dropping the dead `S_ATTR` writes removes 60 wrapper flip-flops (48 at
+  the CI configuration) and 78 optimized AIG ANDs. The mapped generic-gate count rises by 327:
+  ABC `-g AND,OR,XOR,MUX` mapping of the changed cone, not added logic (the AIG is smaller).
+  The bare top (`SPLIT_FETCH=0`, `S_ATTR` unreachable) is identical.
+
+* **Near-zero gate overhead.** The +277 flip-flops (+337 before Phase 5e) are mostly `meta_q`, plus `dr_q`, `axi_err`
+  and the wrapper state. They cost about as many gates as the split mode removes from the top:
+  the unused Channel B input ports and their capture logic, the constant-0 `mu0x_q`/`s0x_q`/...
+  registers, and the generic-cell mapping effects of that smaller cone.
 * **CEC runtime.** At this configuration CEC takes more than the 7 200 s limit of the
   `gs4d_flow` run per design. The ABC mapping takes about 35 min. CEC was therefore rerun
   with ABC `&cec`, on the same `pre.blif`, `mapped.blif` and `optimized.blif`
   converted to AIGER (`read; strash; write_aiger`, then `&r pre.aig; &cec <other>.aig`).
   Both comparisons report "Networks are equivalent" for both designs: 29 min and 104 min for
-  the bare top, 102 min and 158 min for the wrapper.
+  the bare top, 102 min and 158 min for the wrapper. Phase 5e rerun: 29 min and 100 min for
+  the bare top, 76 min and 135 min for the wrapper, all equivalent.
 
 **CI configuration: NUM_PE=1, CACHE_WAYS=2, Q_FRAC=8.**
 
 | Toolchain | Bare top gates / FFs / AIG / levels | Wrapper + top gates / FFs / AIG / levels | Overhead | CEC |
 |---|---|---|---|---|
-| Local (Yosys 0.23) | 50 639 / 2 279 / 60 769 / 335 | 51 661 / 2 552 / 61 344 / 345 | +1 022 gates (+2.02 %), +273 FFs | PASS / PASS |
-| CI (ubuntu-24.04 apt Yosys) | 49 019 / 2 279 / 61 029 / 348 | 49 911 / 2 552 / 61 812 / 351 | +892 gates (+1.82 %), +273 FFs | PASS / PASS |
+| Local (Yosys 0.23), Phase 5e | 50 639 / 2 279 / 60 769 / 335 | 51 613 / 2 504 / 61 271 / 344 | +974 gates (+1.92 %), +225 FFs | PASS / PASS |
+| Local (Yosys 0.23), before Phase 5e | 50 639 / 2 279 / 60 769 / 335 | 51 661 / 2 552 / 61 344 / 345 | +1 022 gates (+2.02 %), +273 FFs | PASS / PASS |
+| CI (ubuntu-24.04 apt Yosys), Phase 5e | 49 019 / 2 279 / 61 029 / 348 | 49 780 / 2 504 / 61 843 / 351 | +761 gates (+1.55 %), +225 FFs | PASS / PASS |
+| CI (ubuntu-24.04 apt Yosys), before Phase 5e | 49 019 / 2 279 / 61 029 / 348 | 49 911 / 2 552 / 61 812 / 351 | +892 gates (+1.82 %), +273 FFs | PASS / PASS |
 
 **Legacy (`SPLIT_FETCH=0`) netlist vs base `af43f4c`.** Same configuration and toolchain:
 

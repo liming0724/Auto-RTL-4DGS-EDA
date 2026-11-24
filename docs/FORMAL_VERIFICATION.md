@@ -29,7 +29,7 @@ rtl_baseline RTL --sv2v/yosys--> primitive-gate .v + .blif + manifest.json   (sc
    (property/equivalence proofs)              (fault -> SAT -> trace -> Verilator replay)
 ```
 
-**Netlist bridge.** `rtl_to_netlist.py` runs `synth -flatten -noabc -nofsm`,
+**Netlist bridge.** `rtl_to_netlist.py` runs `setattr -set keep 1 t:SRAM_*`, `synth -flatten -noabc -nofsm`,
 `setundef -zero`, `dffunmap` and `abc -g AND,NAND,OR,NOR,XOR,XNOR`, then rewrites the
 Yosys JSON as one scalar net per bit using only `and/or/nand/nor/xor/xnor/not/buf`,
 `assign` and `dff (.C, .R, .D, .Q)`, which `VerilogParser` reads without
@@ -46,7 +46,13 @@ outputs become free inputs, so GS control proofs hold for any datapath value.
 | `fp16_div8` | 108 | 0 | 0 |
 | `fp16_mult2` | 74 | 0 | 0 |
 | `ssim_custom_shift_safe` | 12,593 | 2,269 | 0 |
-| `GS_RASTERIZER_pipeline` | 8,286 | 2,729 | 48 |
+| `GS_RASTERIZER_pipeline` | 8,613 | 2,730 | 49 |
+
+Like Tier 2, the bridge marks `SRAM_*` instances `keep` (Phase 5e), so the write-only frame
+buffer `sram2` stays an opaque cell (49, not 48). The 3 extra Tier 2 flip-flops (2,733) come
+from FSM recoding, which `-nofsm` disables here. Before Phase 5e the GS row was 8,286 gates,
+2,729 DFFs, 48 opaque cells; the alpha clamp and the crossing flag `tail_crossed` add the
+gates and one DFF.
 
 These are generic two-input gate counts for formal work, not the project's 130 nm
 figures.

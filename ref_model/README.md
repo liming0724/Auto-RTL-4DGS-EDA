@@ -43,8 +43,8 @@ accumulation of RGB and interpolated depth, early stop at `T < 1e-4`, `D = depth
   early-terminated pixel every later pixel ends immediately with `N=0`, `T=1`
   (2148 of 2550 pixels in scene seed 1).
 
-Four more flags describe where the RTL differs from the lab golden_ans (on = RTL, off =
-golden behaviour):
+Four more flags describe where the RTL differs from the lab golden_ans (on = pre-Phase 5e
+RTL, off = golden behaviour):
 
 * `stop_on_crossing`: the RTL leaves PROCESS after the Gaussian that drives `T` below
   `1e-4` (plus the stage-10 entry in flight); the golden blends one more `alpha >= 1/255`
@@ -53,16 +53,27 @@ golden behaviour):
   counter increments once more after the `N >= 1089` stop); the golden reports 1089.
 * `rgb_wrap`: the RTL keeps the low 8 bits of the 9-bit colour, so a sum above 255 wraps;
   the golden saturates at 255.
-* `depth_stop_tail`: the RTL adds every committed Gaussian to depth; the golden's depth
-  skips the Gaussian that drives `T` below `1e-4` and every one after it (`T` and RGB still
-  include them). Found by fitting the golden, not from a known design.
+* `depth_stop_tail`: the pre-Phase 5e RTL added every committed Gaussian to depth; the
+  golden's depth skips the Gaussian that drives `T` below `1e-4` and every one after it (`T`
+  and N still include them). Found by fitting the golden, not from a known design.
+* `rgb_stop_tail`: the same rule for RGB (`docs/BACKLOG_INVESTIGATION.md` item 2): the golden
+  does not blend the crossing Gaussian or any later one into RGB either.
+* `alpha_clamp` (on = golden): the 3DGS clamp `alpha = min(0.99, conw * exp)`
+  (`docs/BACKLOG_INVESTIGATION.md` item 1); off = the pre-Phase 5e unclamped RTL.
+
+Phase 5e implemented the last three rules in the RTL (stage-7 clamp, stage-10 RGB/depth gate
+on `s10_altb` plus a per-pixel `tail_crossed` flag), so the defaults are now
+`depth_stop_tail = rgb_stop_tail = false`, `alpha_clamp = true` and `q111` is still the
+current RTL.
 
 ## Golden-answer check
 
 `verif/run_golden.sh [DIR]` renders the scene in `DIR` (default
 `verif/golden/gs_rasterizer`, see its README) with every quirk combination
-`q<dxdy><trans><early>` (q111 = current RTL), `q000` plus each golden flag off
-(`q000_s/n/r/d`), every flag off (`q000_snrd`) and the ideal algorithm, simulates the RTL,
+`q<dxdy><trans><early>` (q111 = current RTL), `q000` with the pre-Phase 5e tail/clamp
+behaviour plus each golden rule (`q000_s/n/r/d/t/c`, see `tools/gs4d_render.cpp`), the PR #1
+"all off" set (`q000_snrd`), every golden rule (`q000_snrdtc`, 0 tolerance mismatches on the
+lab scene) and the ideal algorithm, simulates the RTL,
 and prints exact and TB.sv-tolerance mismatch counts per field (N, T, D, RGB) against
 `DIR/golden_ans`, with per-pixel lists in `build/golden/mismatch/*.csv`. Only RTL vs q111 is
 gated; golden mismatches are reported. A scene written by `gs4d_ref --n 1089` works as a

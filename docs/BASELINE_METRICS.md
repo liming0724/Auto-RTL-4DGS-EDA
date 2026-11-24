@@ -145,7 +145,13 @@ mapped combinational network.
 | Top | Generic gates, pre → mapped | Flip-flops | Opaque macros | AIG ANDs, mapped → optimized | AIG levels, mapped → optimized |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | `SSIM_v2` | 30,149 → 21,424 | 13,220 | 115 | 37,846 → 37,519 | 17 → 16 |
-| `GS_RASTERIZER_pipeline` | 631 → 580 | 2,732 | 49 | 564 → 542 | 12 → 12 |
+| `GS_RASTERIZER_pipeline` | 797 → 668 | 2,733 | 49 | 651 → 629 | 15 → 15 |
+
+Phase 5e (`docs/BACKLOG_INVESTIGATION.md`, "Fixed in Phase 5e") added the 3DGS alpha clamp
+and the stage-10 crossing gate to GS. Before it (`main` @ `b86da86`, same toolchain) GS was
+631 → 580 gates, 2,732 flip-flops, 49 opaque macros, 564 → 542 AIG ANDs, 12 → 12 levels: the
+fix costs +88 mapped gates, +1 flip-flop (`tail_crossed`) and +3 AIG levels. The GS
+simulation result (432,919 cycles, 2,550 bit-exact pixels) is unchanged.
 
 Counts exclude opaque macro internals. AIG ANDs and levels are **generic-cell
 area and depth proxies**, not cell area, delay, frequency, or the 130 nm

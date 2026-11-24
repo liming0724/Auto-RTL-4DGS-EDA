@@ -320,6 +320,7 @@ module GS_RASTERIZER_pipeline (
 
     // ============ INIT_PIXEL and pixel update logic (combinational) ============
     logic [31:0] s10_r, s10_g, s10_b, s10_d;
+    logic        s10_altb, tail_crossed;
 
     always_comb begin
         current_pixel_next = current_pixel;
@@ -340,8 +341,10 @@ module GS_RASTERIZER_pipeline (
             end
             
             // Stage 10: 更新 RGB, depth, num_of_gaussian
+            // Stage 10: the Gaussian that drives T below 1e-4 and every later one in the
+            // pixel are not blended (3DGS: done = true; continue). T and N still count them.
             if (stage_valid_10) begin
-                if (!(alpha_too_small_1_s10 || beta_positive_3_s10)) begin
+                if (!(alpha_too_small_1_s10 || beta_positive_3_s10 || tail_crossed || s10_altb)) begin
                     current_pixel_next.red   = s10_r;
                     current_pixel_next.green = s10_g;
                     current_pixel_next.blue  = s10_b;
@@ -351,6 +354,15 @@ module GS_RASTERIZER_pipeline (
             end
         end
         
+    end
+
+    // ============ crossing flag (sequential) ============
+    // Set by the first committed stage-10 entry with T_test < 1e-4; cleared per pixel.
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) tail_crossed <= 1'b0;
+        else if (state == INIT_PIXEL) tail_crossed <= 1'b0;
+        else if (state == PROCESS && stage_valid_10 && !(alpha_too_small_1_s10 || beta_positive_3_s10) && s10_altb)
+            tail_crossed <= 1'b1;
     end
 
     // ============ INIT_PIXEL and pixel update (sequential) ============
@@ -754,6 +766,11 @@ module GS_RASTERIZER_pipeline (
         .a(g_s7.conw), .b(alpha_term_s7), .rnd(3'b0), .z(s7_mult0_z), .status(s7_mst0)
     );
 
+    // 3DGS alpha clamp alpha = min(0.99, conw * exp): 0.99 (0x3F7D70A4) < z in IEEE order,
+    // i.e. z positive, above 0.99 and not NaN (+Inf clamps).
+    logic s7_alpha_clamp;
+    assign s7_alpha_clamp = !s7_mult0_z[31] && s7_mult0_z[30:0] > 31'h3F7D70A4 && s7_mult0_z[30:0] <= 31'h7F800000;
+
     always_comb begin
         alpha_i_s8_next = alpha_i_s8;
         depth_i_2_s8_next = depth_i_2_s8;
@@ -761,7 +778,7 @@ module GS_RASTERIZER_pipeline (
         g_s8_next = g_s8;
         
         if (stage_valid_7) begin
-            alpha_i_s8_next = s7_mult0_z;
+            alpha_i_s8_next = s7_alpha_clamp ? 32'h3F7D70A4 : s7_mult0_z;
             depth_i_2_s8_next = depth_i_1_s7;
             beta_positive_1_s8_next = beta_positive_s7;
             g_s8_next = g_s7;
@@ -920,7 +937,7 @@ end
     end
 
     // ---------------- CALC_STEP10 (combinational) ----------------
-    logic s10_agtb, s10_altb, s10_aeqb, s10_unordered;
+    logic s10_agtb, s10_aeqb, s10_unordered;
     DW_fp_cmp #(inst_sig_width, inst_exp_width, inst_ieee_compliance) S10_CMP0 (
         .a(T_test_s10), .b(32'h38D1B717), .agtb(s10_agtb), .altb(s10_altb), .aeqb(s10_aeqb), .unordered(s10_unordered)
     );

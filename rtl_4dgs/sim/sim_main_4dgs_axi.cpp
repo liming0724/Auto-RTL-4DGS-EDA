@@ -19,7 +19,16 @@
 // MODELED B_meta + (1 - skip_rate) * B_attr prediction within B_meta + B_attr; axi_err never
 // set; at least 10000 cycles.
 // MEASURED bytes = meta_beats * B_meta + attr_beats * B_attr (handshakes counted here).
-// Usage: Vgs4d_axi_wrapper +thresh=<N> [+bypass=<0|1>] [+scene=<mode>]
+// Optional modes:
+//   +meta_slow=<D>  Channel A raises tvalid with probability 1/D per cycle instead of 3/4, so the
+//                   wrapper waits on the source (meta_stall_cycles); also requires
+//                   meta_stall_cycles >= Gaussians / 4 (the default source gives <= 14 per run).
+//   +bad_tuser=<K>  negative run: attr beat K carries tuser = gauss_id ^ 1 and inverted tdata; the
+//                   source then resends the correct beat. Expected failure: PASS iff axi_err is 0
+//                   before that handshake and set on every cycle after it (sticky), the bad beat is
+//                   not forwarded (zero golden mismatches, all outputs done), exactly one extra attr
+//                   beat, and the normal checks fail.
+// Usage: Vgs4d_axi_wrapper +thresh=<N> [+bypass=<0|1>] [+scene=<mode>] [+meta_slow=<D>] [+bad_tuser=<K>]
 #include <algorithm>
 #include <cinttypes>
 #include <cstdio>
@@ -90,12 +99,15 @@ struct Job { gs4d_ref::GaussIn in; gs4d_ref::GaussOut out; };
 
 int main(int argc, char** argv) {
   Verilated::commandArgs(argc, argv);
-  uint32_t thresh = 0, bypass = 0;
+  uint32_t thresh = 0, bypass = 0, meta_slow = 0;
+  int64_t bad_tuser = -1;
   gs4d_frame::SceneMode mode = gs4d_frame::SceneMode::kBenign;
   std::string scene_name = "benign";
   for (int i = 1; i < argc; ++i) {
     if (!std::strncmp(argv[i], "+thresh=", 8)) thresh = static_cast<uint32_t>(std::atoi(argv[i] + 8));
     if (!std::strncmp(argv[i], "+bypass=", 8)) bypass = std::atoi(argv[i] + 8) != 0;
+    if (!std::strncmp(argv[i], "+meta_slow=", 11)) meta_slow = static_cast<uint32_t>(std::atoi(argv[i] + 11));
+    if (!std::strncmp(argv[i], "+bad_tuser=", 11)) bad_tuser = std::atoll(argv[i] + 11);
     if (!std::strncmp(argv[i], "+scene=", 7)) {
       scene_name = argv[i] + 7;
       if (!gs4d_frame::parse_scene(argv[i] + 7, &mode)) {
@@ -138,13 +150,15 @@ int main(int argc, char** argv) {
   size_t meta_sent = 0, done = 0;
   uint64_t cycles = 0, mismatches = 0, attr_beats = 0, meta_beats = 0, skip_hit_requests = 0, multi_attr = 0;
   uint64_t meta_stall = 0, attr_stall = 0, out_bp = 0, max_bp_run = 0, bp_run = 0, axi_err_cycles = 0;
+  uint64_t err_before = 0, err_after = 0, cycles_after = 0;
+  bool injected = false, bad_pending = false;
   int out_stall_left = 0, attr_delay = -1;
   std::vector<uint8_t> attr_count(n, 0);
   const uint64_t limit = 400 * n + 100000;
   while (done < n && cycles < limit) {
     top.clk = 0;
     // Channel A source: raise tvalid after a random gap, hold until accepted.
-    if (!top.s_axis_meta_tvalid && meta_sent < n && rng.chance(3, 4)) {
+    if (!top.s_axis_meta_tvalid && meta_sent < n && (meta_slow ? rng.chance(1, meta_slow) : rng.chance(3, 4))) {
       const auto& g = jobs[meta_sent].in;
       clear(top.s_axis_meta_tdata, kMetaBits);
       put(top.s_axis_meta_tdata, 0, W, g.pix_y & kMask);
@@ -171,6 +185,11 @@ int main(int argc, char** argv) {
         put(top.s_axis_attr_tdata, 4 * W, W, g.mu0_y & kMask);
         put(top.s_axis_attr_tdata, 5 * W, W, g.mu0_x & kMask);
         top.s_axis_attr_tuser = g.id;
+        bad_pending = !injected && bad_tuser >= 0 && attr_beats == static_cast<uint64_t>(bad_tuser);
+        if (bad_pending) {
+          for (int i = 0; i < (kAttrBits + 31) / 32; ++i) top.s_axis_attr_tdata[i] = ~top.s_axis_attr_tdata[i];
+          top.s_axis_attr_tuser = (g.id ^ 1u) & ((1u << kIdW) - 1);
+        }
         top.s_axis_attr_tvalid = 1;
         attr_delay = -1;
       }
@@ -191,6 +210,8 @@ int main(int argc, char** argv) {
     if (top.s_axis_attr_tready && meta_sent > 0 && jobs[meta_sent - 1].out.skipped) ++skip_hit_requests;
     if (attr_fire && ++attr_count[meta_sent - 1] > 1) ++multi_attr;
     axi_err_cycles += top.axi_err;
+    if (injected) { err_after += top.axi_err; ++cycles_after; }
+    else err_before += top.axi_err;
     if (out_fire) {
       const auto& e = jobs[done].out;
       bool ok = top.out_id == e.id && top.out_skipped == (e.skipped ? 1u : 0u) && top.out_delta == e.delta &&
@@ -207,7 +228,7 @@ int main(int argc, char** argv) {
     top.eval();
     ++cycles;
     if (meta_fire) { top.s_axis_meta_tvalid = 0; ++meta_sent; ++meta_beats; }
-    if (attr_fire) { top.s_axis_attr_tvalid = 0; ++attr_beats; }
+    if (attr_fire) { top.s_axis_attr_tvalid = 0; ++attr_beats; injected = injected || bad_pending; bad_pending = false; }
   }
   const uint64_t golden_fetch = n - golden_skipped;
   const uint64_t measured = meta_beats * kBMeta + attr_beats * kBAttr;
@@ -217,17 +238,30 @@ int main(int argc, char** argv) {
   for (uint64_t i = 0; i < n; ++i) attr_per_gauss_bad += attr_count[i] != (jobs[i].out.skipped ? 0 : 1);
   const int64_t attr_err = static_cast<int64_t>(attr_beats) - static_cast<int64_t>(golden_fetch);
   const int64_t byte_err = static_cast<int64_t>(measured) - static_cast<int64_t>(modeled);
-  const bool pass = done == n && mismatches == 0 && meta_beats == n && std::llabs(attr_err) <= 1 &&
-                    attr_per_gauss_bad == 0 && skip_hit_requests == 0 && std::llabs(byte_err) <= kBMeta + kBAttr &&
-                    axi_err_cycles == 0 && cycles >= 10000 && (!bypass || attr_beats == n);
+  const bool normal_pass = done == n && mismatches == 0 && meta_beats == n && std::llabs(attr_err) <= 1 &&
+                           attr_per_gauss_bad == 0 && skip_hit_requests == 0 &&
+                           std::llabs(byte_err) <= kBMeta + kBAttr && axi_err_cycles == 0 && cycles >= 10000 &&
+                           (!bypass || attr_beats == n) && (!meta_slow || 4 * meta_stall >= n);
+  // The bad beat is a second attr beat for its Gaussian: one multi-beat and one count error.
+  const bool negative_pass = injected && err_before == 0 && cycles_after > 0 && err_after == cycles_after &&
+                             done == n && mismatches == 0 && meta_beats == n && attr_per_gauss_bad == 2 &&
+                             std::llabs(attr_err - 1) <= 1 && skip_hit_requests == 0 && !normal_pass;
+  const bool pass = bad_tuser >= 0 ? negative_pass : normal_pass;
+  const char* mode_name = bad_tuser >= 0 ? "bad_tuser" : meta_slow ? "meta_slow" : "normal";
+  if (bad_tuser >= 0)
+    std::printf("negative run: bad tuser at attr beat %" PRId64 " injected=%d axi_err before=%" PRIu64
+                " after=%" PRIu64 "/%" PRIu64 " cycles normal_checks=%s -> expected failure %s\n",
+                bad_tuser, injected, err_before, err_after, cycles_after, normal_pass ? "PASS" : "FAIL",
+                negative_pass ? "OBSERVED" : "NOT OBSERVED");
   const double skip_rate = double(golden_skipped) / n;
   const double avg = double(measured) / n;
-  std::printf("scene=%s Q%d T=%u bypass=%u gaussians=%" PRIu64 " golden_skipped=%" PRIu64 " meta_beats=%" PRIu64
+  std::printf("mode=%s scene=%s Q%d T=%u bypass=%u gaussians=%" PRIu64 " golden_skipped=%" PRIu64 " meta_beats=%" PRIu64
               " attr_beats=%" PRIu64 " MEASURED=%" PRIu64 " B (avg %.3f B) MODELED=%" PRIu64 " B baseline=%" PRIu64
               " B cycles=%" PRIu64 " mismatches=%" PRIu64 " skip_hit_attr_requests=%" PRIu64 " axi_err=%" PRIu64 " %s\n",
-              scene_name.c_str(), Q_FRAC, thresh, bypass, n, golden_skipped, meta_beats, attr_beats, measured, avg,
+              mode_name, scene_name.c_str(), Q_FRAC, thresh, bypass, n, golden_skipped, meta_beats, attr_beats, measured, avg,
               modeled, baseline, cycles, mismatches, skip_hit_requests, axi_err_cycles, pass ? "PASS" : "FAIL");
-  std::printf("RESULT {\"scene\": \"%s\", \"q_frac\": %d, \"motion_thresh\": %u, \"cache_bypass\": %u, "
+  std::printf("RESULT {\"mode\": \"%s\", \"meta_slow\": %u, \"bad_tuser\": %" PRId64 ", "
+              "\"normal_checks_pass\": %s, \"scene\": \"%s\", \"q_frac\": %d, \"motion_thresh\": %u, \"cache_bypass\": %u, "
               "\"cache_ways\": %d, \"transactions\": %" PRIu64 ", \"golden_skipped\": %" PRIu64 ", \"skip_rate\": %.6f, "
               "\"meta_beats\": %" PRIu64 ", \"attr_beats\": %" PRIu64 ", \"b_meta\": %d, \"b_attr\": %d, "
               "\"b_baseline\": %d, \"measured_bytes\": %" PRIu64 ", \"modeled_bytes\": %" PRIu64 ", "
@@ -236,6 +270,7 @@ int main(int argc, char** argv) {
               "\"attr_per_gaussian_errors\": %" PRIu64 ", \"cycles\": %" PRIu64 ", \"meta_stall_cycles\": %" PRIu64 ", "
               "\"attr_stall_cycles\": %" PRIu64 ", \"out_backpressure_cycles\": %" PRIu64 ", \"max_out_stall_run\": %" PRIu64
               ", \"mismatches\": %" PRIu64 ", \"axi_err\": %" PRIu64 ", \"pass\": %s}\n",
+              mode_name, meta_slow, bad_tuser, normal_pass ? "true" : "false",
               scene_name.c_str(), Q_FRAC, thresh, bypass, CACHE_WAYS, n, golden_skipped, skip_rate, meta_beats, attr_beats,
               kBMeta, kBAttr, kBBase, measured, modeled, baseline, avg, double(modeled) / n,
               100.0 * (1.0 - double(measured) / baseline), skip_hit_requests, attr_per_gauss_bad, cycles, meta_stall,

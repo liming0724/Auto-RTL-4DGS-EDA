@@ -7,9 +7,11 @@
 // algorithm:
 //   q<D><T><E>  RtlRasterizer with stale_dxdy_depth=D, stale_trans=T,
 //               sticky_early=E, other flags on (q111 = bit-true to the current RTL)
-//   q000_<f>    q000 with one more flag off: s stop_on_crossing, n n_overshoot,
-//               r rgb_wrap, d depth_stop_tail
-//   q000_snrd   every RtlQuirks flag off (the golden_ans behaviour)
+//   q000_<f>    q000 with the pre-Phase 5e RTL tail/clamp behaviour, plus each golden
+//               rule named in <f>: s stop_on_crossing off, n n_overshoot off, r rgb_wrap
+//               off, d depth_stop_tail off, t rgb_stop_tail off, c alpha_clamp on
+//   q000_snrd   the PR #1 "every quirk off" configuration (no clamp, RGB blends the tail)
+//   q000_snrdtc every golden rule (the golden_ans behaviour)
 //   ideal       render_ideal (no pipeline hazards)
 #include <cstring>
 #include <sys/stat.h>
@@ -53,13 +55,15 @@ int main(int argc, char** argv) {
     std::snprintf(tag, sizeof tag, "q%d%d%d", q.stale_dxdy_depth, q.stale_trans, q.sticky_early);
     if (!emit(tag, RtlRasterizer<F32Policy>(pf, tc, q).run(s1, s0))) return 1;
   }
-  for (const char* f : {"s", "n", "r", "d", "snrd"}) {
+  for (const char* f : {"s", "n", "r", "d", "t", "c", "snrd", "snrdc", "snrdt", "snrdtc", "snrtc"}) {
     RtlQuirks q{false, false, false};
     const std::string fs(f);
     q.stop_on_crossing = fs.find('s') == std::string::npos;
     q.n_overshoot = fs.find('n') == std::string::npos;
     q.rgb_wrap = fs.find('r') == std::string::npos;
     q.depth_stop_tail = fs.find('d') == std::string::npos;
+    q.rgb_stop_tail = fs.find('t') == std::string::npos;
+    q.alpha_clamp = fs.find('c') != std::string::npos;
     if (!emit("q000_" + fs, RtlRasterizer<F32Policy>(pf, tc, q).run(s1, s0))) return 1;
   }
   return emit("ideal", render_ideal(pf, s1, s0, tc)) ? 0 : 1;

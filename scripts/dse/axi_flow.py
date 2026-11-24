@@ -32,19 +32,24 @@ OUT = ROOT / "build/4dgs/axi"
 WRAPPER = "gs4d_axi_wrapper"
 WRAP_FILES = [RTL / f"{WRAPPER}.sv", *gs4d_flow.RTL_FILES]
 WAYS = qs.PROFILE_WAYS
-RUNS = ([(scene, q, t, 0) for scene in qs.SCENES for q in qs.Q_FRACS for t in (0, 1, 16)]
-        + [("benign", 8, 3, 0), ("benign", 8, 16, 1)])
+# (scene, Q, T, bypass, extra plusargs). Extra runs: a slow Channel A source (tvalid 1/8 of the
+# cycles, the wrapper waits on it) and a negative run (wrong tuser on attr beat 100, expected to
+# set sticky axi_err; PASS means the error was observed and the bad beat was dropped).
+RUNS = ([(scene, q, t, 0, ()) for scene in qs.SCENES for q in qs.Q_FRACS for t in (0, 1, 16)]
+        + [("benign", 8, 3, 0, ()), ("benign", 8, 16, 1, ()),
+           ("benign", 8, 1, 0, ("+meta_slow=8",)), ("pan", 12, 1, 0, ("+meta_slow=8",)),
+           ("benign", 8, 1, 0, ("+bad_tuser=100",))])
 SYNTH_CFG = dict(num_pe=2, q_frac=12, cache_ways=4, cache_sets=512)
 # Part D of the Phase 5c task: MODELED prediction from the Phase 5a/5b skip rates.
 PART_D = [("benign", 8, 1, 0.842, 37.89, 21.1), ("benign", 8, 3, 0.868, 37.59, 21.7),
           ("benign", 8, 16, 0.904, 37.15, 22.6), ("benign", 12, 1, 0.826, 46.61, 21.0),
           ("benign", 12, 16, 0.852, 46.22, 21.7), ("pan", 8, 1, 0.120, 46.56, 3.0),
           ("fast", 8, 1, 0.855, 37.74, 21.4)]
-KEYS = ["scene", "q_frac", "motion_thresh", "cache_bypass", "transactions", "golden_skipped", "skip_rate",
+KEYS = ["mode", "scene", "q_frac", "motion_thresh", "cache_bypass", "transactions", "golden_skipped", "skip_rate",
         "meta_beats", "attr_beats", "b_meta", "b_attr", "b_baseline", "measured_bytes", "modeled_bytes",
         "baseline_bytes", "measured_avg_bytes", "modeled_avg_bytes", "measured_reduction_pct",
         "attr_requests_on_skip_hit", "cycles", "meta_stall_cycles", "attr_stall_cycles",
-        "out_backpressure_cycles", "max_out_stall_run", "mismatches", "axi_err", "pass"]
+        "out_backpressure_cycles", "max_out_stall_run", "mismatches", "axi_err", "normal_checks_pass", "pass"]
 
 
 def build(q_frac, verilator):
@@ -63,11 +68,12 @@ def build(q_frac, verilator):
     return out / f"obj_dir/V{WRAPPER}"
 
 
-def point(scene, q_frac, thresh, bypass, binary):
-    out = OUT / f"q{q_frac}_{scene}_t{thresh}_b{bypass}"
+def point(scene, q_frac, thresh, bypass, extra, binary):
+    tag = "".join("_" + a[1:].replace("=", "") for a in extra)
+    out = OUT / f"q{q_frac}_{scene}_t{thresh}_b{bypass}{tag}"
     out.mkdir(parents=True, exist_ok=True)
     log = out / "sim.log"
-    text = qs.run([binary, f"+scene={scene}", f"+thresh={thresh}", f"+bypass={bypass}"], log, timeout=3600)
+    text = qs.run([binary, f"+scene={scene}", f"+thresh={thresh}", f"+bypass={bypass}", *extra], log, timeout=3600)
     r = qs.result_of(text, log)
     if not r["pass"]:
         raise RuntimeError(f"AXI sim FAILED: {log}")
@@ -82,7 +88,7 @@ def write_sim(rows):
         w = csv.DictWriter(f, fieldnames=KEYS, extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)
-    find = {(r["scene"], r["q_frac"], r["motion_thresh"], r["cache_bypass"]): r for r in rows}
+    find = {(r["scene"], r["q_frac"], r["motion_thresh"], r["cache_bypass"]): r for r in rows if r["mode"] == "normal"}
     lines = ["# Phase 5c split-fetch AXI bandwidth", "",
              "MEASURED: AXI4-Stream handshakes counted in the cycle-accurate Verilator simulation of",
              "gs4d_axi_wrapper (CACHE_WAYS=4), x beat bytes (B_meta = ceil((12+17W)/8), B_attr = ceil(6W/8)).",
@@ -96,14 +102,16 @@ def write_sim(rows):
         lines.append(f"| {scene} | Q{q} | {t} | {skip:.3f} | {avg:.2f} | {red:.1f}% | {r['skip_rate']:.4f} | "
                      f"{r['measured_avg_bytes']:.2f} | {r['measured_reduction_pct']:.1f}% | {r['b_baseline']} |")
     lines += ["", "## All runs (MEASURED unless noted)", "",
-              "| scene | Q | T | bypass | Gaussians | meta beats | attr beats | MEASURED bytes | MODELED bytes "
-              "| MEASURED avg B | MEASURED red. | cycles | mismatches | axi_err |",
-              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+              "| mode | scene | Q | T | bypass | Gaussians | meta beats | attr beats | MEASURED bytes | MODELED bytes "
+              "| MEASURED avg B | MEASURED red. | cycles | meta stall cycles | mismatches | axi_err cycles |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in rows:
-        lines.append(f"| {r['scene']} | Q{r['q_frac']} | {r['motion_thresh']} | {r['cache_bypass']} | {r['transactions']} | "
+        lines.append(f"| {r['mode']} | {r['scene']} | Q{r['q_frac']} | {r['motion_thresh']} | {r['cache_bypass']} | {r['transactions']} | "
                      f"{r['meta_beats']} | {r['attr_beats']} | {r['measured_bytes']} | {r['modeled_bytes']} | "
                      f"{r['measured_avg_bytes']:.2f} | {r['measured_reduction_pct']:.2f}% | {r['cycles']} | "
-                     f"{r['mismatches']} | {r['axi_err']} |")
+                     f"{r['meta_stall_cycles']} | {r['mismatches']} | {r['axi_err']} |")
+    lines += ["", "mode: normal = default sources; meta_slow = Channel A tvalid 1/8 of cycles; bad_tuser = negative",
+              "run (wrong tuser on attr beat 100), PASS = sticky axi_err observed and the bad beat dropped."]
     (OUT / "axi_bandwidth.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -114,10 +122,11 @@ def sim(args):
         rows = list(pool.map(lambda p: point(*p, bins[p[1]]), RUNS))
     write_sim(rows)
     for r in rows:
-        print(f"axi {r['scene']:6s} Q{r['q_frac']:<2d} T={r['motion_thresh']:<2d} bypass={r['cache_bypass']}: PASS "
+        print(f"axi {r['mode']:9s} {r['scene']:6s} Q{r['q_frac']:<2d} T={r['motion_thresh']:<2d} bypass={r['cache_bypass']}: PASS "
               f"gaussians={r['transactions']} meta_beats={r['meta_beats']} attr_beats={r['attr_beats']} "
               f"MEASURED avg={r['measured_avg_bytes']:.2f} B ({r['measured_reduction_pct']:.2f}% vs {r['b_baseline']} B) "
-              f"MODELED avg={r['modeled_avg_bytes']:.2f} B cycles={r['cycles']} mismatches={r['mismatches']}")
+              f"MODELED avg={r['modeled_avg_bytes']:.2f} B cycles={r['cycles']} meta_stall={r['meta_stall_cycles']} "
+              f"mismatches={r['mismatches']} axi_err={r['axi_err']}")
     print(f"wrote {OUT / 'axi_bandwidth.md'}")
 
 

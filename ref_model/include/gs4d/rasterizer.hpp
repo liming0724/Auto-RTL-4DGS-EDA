@@ -33,9 +33,11 @@ struct TileConfig {
   int num_pixels() const { return width * height; }
 };
 
-// Each flag reproduces one observed RTL behaviour (default: all on, i.e.
-// bit-true to the current RTL). Turning one off models the fix; the last four
-// off give the behaviour seen in the lab golden_ans (verif/golden/).
+// The defaults are bit-true to the current RTL. Each of the first seven flags on
+// reproduces one observed (pre-Phase 5e) RTL behaviour, off models the fix;
+// Phase 5e fixed depth_stop_tail in the RTL, so it now defaults off. With
+// stop_on_crossing, n_overshoot, rgb_wrap, depth_stop_tail and rgb_stop_tail off
+// and alpha_clamp on the model matches the lab golden_ans (verif/golden/).
 struct RtlQuirks {
   bool stale_dxdy_depth = true;  // stage 3 uses dx_s2/dy_s2 (next Gaussian's) for depth
   bool stale_trans = true;       // stage 8 misses the stage-9 transmittance write-back
@@ -46,8 +48,15 @@ struct RtlQuirks {
   bool n_overshoot = true;       // on: N reaches 1090 on a full traversal; off: N <= 1089
   bool rgb_wrap = true;          // on: 9-bit colour & 0xFF; off: saturate at 255
   // on: depth accumulates every committed Gaussian; off: depth skips the
-  // Gaussian that drives T below 1e-4 and every one after it.
-  bool depth_stop_tail = true;
+  // Gaussian that drives T below 1e-4 and every one after it (golden and, since
+  // Phase 5e, the RTL).
+  bool depth_stop_tail = false;
+  // Same rule for RGB: on: RGB accumulates every committed Gaussian (pre-Phase 5e
+  // RTL); off: RGB skips the crossing Gaussian and every one after it.
+  bool rgb_stop_tail = false;
+  // 3DGS alpha clamp alpha = min(0.99, conw * exp) (golden and, since Phase 5e, the
+  // RTL); off: unclamped (pre-Phase 5e RTL).
+  bool alpha_clamp = true;
 };
 
 // IEEE-754 binary32 bit patterns of the RTL constants.
@@ -55,6 +64,7 @@ namespace k {
 constexpr uint32_t kOne = 0x3F800000;          // 1.0
 constexpr uint32_t kMinusHalf = 0xBF000000;    // -0.5
 constexpr uint32_t kAlphaMin = 0x3B808081;     // 1/255
+constexpr uint32_t kAlphaMax = 0x3F7D70A4;     // 0.99 (alpha clamp)
 constexpr uint32_t kTMin = 0x38D1B717;         // 1e-4
 constexpr uint32_t kBgDepth = 0x41700000;      // 15.0
 constexpr uint32_t kColorScale = 0x437F0000;   // 255.0
@@ -96,6 +106,7 @@ class RtlRasterizer {
     const V one_a = p.cst(k::kOne, Sig::kAlpha);
     const V m_half = p.cst(k::kMinusHalf, Sig::kPower);
     const V alpha_min = p.cst(k::kAlphaMin, Sig::kAlpha);
+    const V alpha_max = p.cst(k::kAlphaMax, Sig::kAlpha);
     const V t_min = p.cst(k::kTMin, Sig::kTrans);
     const V bg_depth = p.cst(k::kBgDepth, Sig::kDepth);
     const V cscale = p.cst(k::kColorScale, Sig::kPixel);
@@ -213,9 +224,11 @@ class RtlRasterizer {
         if (r.sv[9] && !(r.small9 || r.bp9) && live9) n.cur.trans = r.ttest9;
         if (live10) {
           if (valid10) {
-            n.cur.red = p.add(r.cur.red, r.r10, Sig::kColor);
-            n.cur.green = p.add(r.cur.green, r.g10, Sig::kColor);
-            n.cur.blue = p.add(r.cur.blue, r.b10, Sig::kColor);
+            if (q_.rgb_stop_tail || !(r.crossed || cross10)) {
+              n.cur.red = p.add(r.cur.red, r.r10, Sig::kColor);
+              n.cur.green = p.add(r.cur.green, r.g10, Sig::kColor);
+              n.cur.blue = p.add(r.cur.blue, r.b10, Sig::kColor);
+            }
             if (q_.depth_stop_tail || !(r.crossed || cross10)) n.cur.depth = p.add(r.cur.depth, r.d10, Sig::kDepth);
           }
           n.cur.n = (r.cur.n + 1) & 0x7FF;
@@ -278,6 +291,7 @@ class RtlRasterizer {
       }
       if (r.sv[7]) {
         n.ai8 = p.mul(r.g7.conw, r.at7, Sig::kAlpha);
+        if (q_.alpha_clamp && p.lt(alpha_max, n.ai8)) n.ai8 = alpha_max;
         n.di8 = r.di7;
         n.bp8 = r.bp7;
         n.g8 = r.g7;
@@ -332,7 +346,7 @@ RenderResult<typename P::V> render_ideal(const P& p, const std::vector<Splat<typ
   const V one_t = p.cst(k::kOne, Sig::kTrans), one_a = p.cst(k::kOne, Sig::kAlpha);
   const V m_half = p.cst(k::kMinusHalf, Sig::kPower), alpha_min = p.cst(k::kAlphaMin, Sig::kAlpha);
   const V t_min = p.cst(k::kTMin, Sig::kTrans), bg_depth = p.cst(k::kBgDepth, Sig::kDepth);
-  const V cscale = p.cst(k::kColorScale, Sig::kPixel);
+  const V cscale = p.cst(k::kColorScale, Sig::kPixel), alpha_max = p.cst(k::kAlphaMax, Sig::kAlpha);
   for (int py = 0; py < tc.height; ++py) {
     for (int px = 0; px < tc.width; ++px) {
       const V fpx = p.from_uint((px + tc.px_offset) & 0x7FF, Sig::kCoord);
@@ -353,16 +367,17 @@ RenderResult<typename P::V> render_ideal(const P& p, const std::vector<Splat<typ
         const V beta = p.sub(p.mul(p.add(bt1, bt2, Sig::kPower), m_half, Sig::kPower), bt3, Sig::kPower);
         const V dsum = p.add(p.mul(dx, ds1, Sig::kDepth), p.mul(dy, ds2, Sig::kDepth), Sig::kDepth);
         const V di = p.sub(d.depth, dsum, Sig::kDepth);
-        const V alpha = p.mul(d.conw, p.exp(beta, Sig::kAlpha), Sig::kAlpha);
+        V alpha = p.mul(d.conw, p.exp(beta, Sig::kAlpha), Sig::kAlpha);
+        if (p.lt(alpha_max, alpha)) alpha = alpha_max;
         if (!p.sign(beta) || p.lt(alpha, alpha_min)) continue;
         const V tacc = p.mul(alpha, T, Sig::kTrans);
         const V ttest = p.mul(p.sub(one_a, alpha, Sig::kAlpha), T, Sig::kTrans);
+        if (p.lt(ttest, t_min)) { T = ttest; break; }  // the crossing Gaussian is not blended
         red = p.add(red, p.mul(tacc, d.red, Sig::kColor), Sig::kColor);
         green = p.add(green, p.mul(tacc, d.green, Sig::kColor), Sig::kColor);
         blue = p.add(blue, p.mul(tacc, d.blue, Sig::kColor), Sig::kColor);
         depth = p.add(depth, p.mul(tacc, di, Sig::kDepth), Sig::kDepth);
         T = ttest;
-        if (p.lt(T, t_min)) break;
       }
       auto& o = res.pixels[py * tc.width + px];
       o.rgb = ((p.to_uint(p.mul(red, cscale, Sig::kPixel), 9) & 0xFF) << 16) |
