@@ -213,7 +213,7 @@ checks `pre.blif` against the mapped and the optimized netlists.
 | Design | Generic gates | Flip-flops | AIG ANDs | AIG levels | CEC |
 |---|---|---|---|---|---|
 | `gs4d_accelerator_top` (bare) | 98 643 | 3 997 | 118 508 | 425 | PASS / PASS |
-| `gs4d_axi_wrapper` (wrapper + top) | 98 661 | 4 274 | 117 533 | 419 | PASS / PASS |
+| `gs4d_axi_wrapper` (wrapper + top) | 98 661 | 4 274 | 117 533 | 419 | `&cec` pending |
 | Overhead | +18 (+0.02 %) | +277 | -975 | -6 | |
 | Before Phase 5e: wrapper + top | 98 334 | 4 334 | 117 611 | 420 | PASS / PASS |
 | Before Phase 5e: overhead | -309 (-0.31 %) | +337 | -897 | -5 | |
