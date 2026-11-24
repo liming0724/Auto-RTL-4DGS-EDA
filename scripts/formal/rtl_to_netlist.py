@@ -197,6 +197,7 @@ def build(target, out, yosys, sv2v, abc, sources=None):
         reads += [f"hierarchy -top {spec['top']}", f"rename -top {spec['top']}"]
         reads += ["setattr -set keep 1 " + " ".join(f"w:{name}" for name in spec["observe"])]
     script.write_text("\n".join(reads + [
+        "setattr -set keep 1 t:SRAM_*",
         f"synth -top {spec['top']} -flatten -noabc -nofsm",
         *([f"rename -top {spec['top']}"] if "params" in spec and not spec.get("observe") else []),
         "setundef -zero", "dffunmap",

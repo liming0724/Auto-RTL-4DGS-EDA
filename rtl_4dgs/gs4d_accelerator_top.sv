@@ -281,10 +281,9 @@ module gs4d_accelerator_top #(
                 S_ATTR: if (SPLIT_FETCH == 0) begin
                     state <= S_ACCEPT;
                 end else if (attr_valid) begin
-                    mu0x_q <= attr_mu0_x; mu0y_q <= attr_mu0_y;
-                    s0x_q  <= attr_s0_x;  s0y_q  <= attr_s0_y;
+                    // Only rho_q is latched: every other Channel B field is consumed in this cycle
+                    // (b_* = attr_* here), mu0x_q/mu0y_q/s0x_q/s0y_q/opa_q are not read after S_ATTR.
                     rho_q  <= fx_add(attr_rho, dr_q);
-                    opa_q  <= attr_opacity;
                     out_mean_x  <= fx_add(b_mu0x, dmux_q);
                     out_mean_y  <= fx_add(b_mu0y, dmuy_q);
                     out_opacity <= b_opa;

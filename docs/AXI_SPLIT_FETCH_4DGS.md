@@ -65,8 +65,11 @@ LSB first. `W = 8 + Q_FRAC` (16 / 20), `ID_W = 12`, `COEF_W = 10W`.
   PROJ phase 0. The datapath (deform, skip, cache, projection, raster math) is unchanged.
 * **Legacy mode.** With `SPLIT_FETCH=0`, LOOKUP goes directly to PROJ, `attr_valid`/`attr_data`
   are ignored and `needs_attr = 0`. Yosys removes `dr_q`.
-* **Dead latches in split mode.** The `mu0x_q`/`mu0y_q`/`s0x_q`/`s0y_q`/`opa_q` latches are
-  written in `S_ATTR` but never read afterwards, so synthesis removes them. Obligation 4c
+* **No dead latches in split mode.** `S_ATTR` latches only `rho_q`. The other Channel B
+  fields are consumed in the `S_ATTR` cycle itself through `b_* = attr_*`; `mu0x_q`/`mu0y_q`/
+  `s0x_q`/`s0y_q`/`opa_q` are written only at ACCEPT (legacy fields, 0 in split mode) and read
+  only through `b_*` outside `S_ATTR` (legacy LOOKUP). Phase 5e removed the five dead `S_ATTR`
+  writes (PR #10 review finding 3); before that, synthesis already removed them. Obligation 4c
   checks their consumers instead (`out_mean_*`, `out_opacity`, `sx_q`, `sy_q`, `proj_a/b`,
   `rho_q`).
 
@@ -78,7 +81,18 @@ The testbench is `rtl_4dgs/sim/sim_main_4dgs_axi.cpp`, driven by `scripts/dse/ax
   per (Gaussian, 4-pixel span), as in the frame testbench.
 * **Configuration.** `CACHE_WAYS=4`, the Phase 5a profiling configuration.
 * **Runs.** `{benign, pan, fast} x Q_FRAC {8, 12} x T {0, 1, 16}` (18 runs), plus benign Q8 T=3
-  (a Part D row) and a `cache_bypass=1` smoke (Q8 T=16).
+  (a Part D row), a `cache_bypass=1` smoke (Q8 T=16), and since Phase 5e (PR #10 review
+  finding 2) three extra runs:
+  * `meta_slow` (`+meta_slow=8`), benign Q8 T=1 and pan Q12 T=1: the Channel A source raises
+    `tvalid` with probability 1/8 per cycle, so the wrapper waits on the source with
+    `s_axis_meta_tready = 1`. All normal checks apply, plus
+    `meta_stall_cycles >= Gaussians / 4`.
+  * `bad_tuser` (`+bad_tuser=100`), benign Q8 T=1: a negative run. Attribute beat 100 carries
+    `tuser = gauss_id ^ 1` and inverted `tdata`; the source then resends the correct beat. It is
+    an expected failure: it passes only if `axi_err` is 0 before that handshake and 1 on every
+    cycle after it (sticky), every output is still bit-true (the bad beat was not forwarded),
+    exactly one extra attribute beat was counted, and the normal checks fail. The run ends
+    when all outputs are done, so it cannot hang.
 * **Stalls.** LFSR-random stalls on metadata `tvalid`, on attribute `tvalid` (reactive, 0-3
   cycles after `tready`), and on `out_ready` (random single-cycle stalls plus bursts of up to
   20 cycles).
@@ -90,8 +104,18 @@ The testbench is `rtl_4dgs/sim/sim_main_4dgs_axi.cpp`, driven by `scripts/dse/ax
     (an independent prediction from the golden model).
   * MEASURED bytes equal the MODELED bytes within `B_meta + B_attr`.
   * `axi_err` stays 0. The run lasts at least 10 000 cycles.
-* **Result.** All 20 runs pass with 0 mismatches and `axi_err = 0`. MEASURED equals MODELED
-  bytes exactly in every run.
+* **Result.** All 23 runs pass. The 22 normal and `meta_slow` runs have 0 mismatches and
+  `axi_err = 0`, and MEASURED equals MODELED bytes exactly. The 20 Phase 5c runs reproduce their
+  Phase 5c numbers. MEASURED Channel A source stalls (`meta_stall_cycles`):
+
+  | Run | Gaussians | `meta_stall_cycles` | cycles | mismatches | `axi_err` cycles |
+  |---|---|---|---|---|---|
+  | 20 Phase 5c runs (default source, 3/4) | 115 528-148 360 | 0-14 per run | | 0 | 0 |
+  | `meta_slow` benign Q8 T=1 | 148 360 | 466 388 | 2 152 121 | 0 | 0 |
+  | `meta_slow` pan Q12 T=1 | 115 528 | 52 943 | 4 821 058 | 0 | 0 |
+  | `bad_tuser` benign Q8 T=1 | 148 360 | 7 | 1 880 412 | 0 | 1 820 471 (every cycle after the bad beat) |
+
+  Pan stalls less because its misses keep the top busy longer per Gaussian.
 
 ### Part D: MODELED prediction vs MEASURED
 

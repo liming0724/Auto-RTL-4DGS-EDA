@@ -26,7 +26,7 @@ FORMAL_TOOLS = --yosys "$(YOSYS)" --sv2v "$(SV2V)" --abc "$(ABC)"
 
 .PHONY: lint lint_ssim lint_gs sim sim_ssim sim_gs synth_baseline cec_baseline build_eda formal_netlists formal_z3 test_cegar \
 	sim_4dgs synth_4dgs formal_4dgs dse_4dgs sim_4dgs_frame eval_quality_4dgs profile_bw_4dgs stress_4dgs conic_cliff_4dgs \
-	sim_4dgs_axi synth_4dgs_axi formal_4dgs_axi
+	sim_4dgs_axi synth_4dgs_axi formal_4dgs_axi prove_products
 lint: lint_ssim lint_gs
 
 lint_ssim:
@@ -95,6 +95,14 @@ synth_4dgs: sim_4dgs
 formal_4dgs: synth_4dgs build_eda
 	$(PYTHON) scripts/formal/rtl_to_netlist.py gs4d_skip_unit gs4d_cache gs4d_deform gs4d_top --check $(FORMAL_TOOLS)
 	$(PYTHON) scripts/formal/verify_z3_4dgs.py
+
+# Tier 3 (after formal_4dgs): complete exhaustive proof of the 10 deform_engine products on the
+# Tier 3 gs4d_deform BLIF (combinational, 0 registers): all 2^24 operand pairs per product, a
+# structural check that each product reads only its own coef slice and t, and a mutant self-test.
+# Needs numpy.
+prove_products:
+	$(PYTHON) scripts/formal/rtl_to_netlist.py gs4d_deform $(FORMAL_TOOLS)
+	$(PYTHON) scripts/formal/prove_products_exhaustive.py
 
 dse_4dgs: $(G4_BUILD)/4dgs_ref
 	$(PYTHON) scripts/dse/run_dse_sweep.py $(G4_TOOLS) --jobs $(DSE_JOBS)
