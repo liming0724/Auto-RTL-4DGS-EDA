@@ -44,6 +44,9 @@ G4_TARGETS = {
     "gs4d_top": dict(top="gs4d_accelerator_top", sources=G4_ALL, sv2v=True, incdir=G4,
                      observe=dict(numerator=17, quotient=17, remainder_q=18, denominator=18),
                      params=dict(NUM_PE=1, Q_FRAC=8, CACHE_WAYS=2, CACHE_SETS=4, ID_W=4)),
+    "gs4d_axi": dict(top="gs4d_axi_wrapper", sources=(f"{G4}/gs4d_axi_wrapper.sv", *G4_ALL), sv2v=True, incdir=G4,
+                     observe=dict(needs_attr=1, top_attr_valid=1, top_attr_data=72, top_in_ready=1),
+                     params=dict(NUM_PE=1, Q_FRAC=4, CACHE_WAYS=2, CACHE_SETS=4, ID_W=4)),
 }
 BASELINE_TARGETS = tuple(TARGETS)
 TARGETS.update(G4_TARGETS)

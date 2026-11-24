@@ -25,7 +25,8 @@ VERILATOR_BUILD := --cc --exe --build -O2
 FORMAL_TOOLS = --yosys "$(YOSYS)" --sv2v "$(SV2V)" --abc "$(ABC)"
 
 .PHONY: lint lint_ssim lint_gs sim sim_ssim sim_gs synth_baseline cec_baseline build_eda formal_netlists formal_z3 test_cegar \
-	sim_4dgs synth_4dgs formal_4dgs dse_4dgs sim_4dgs_frame eval_quality_4dgs profile_bw_4dgs stress_4dgs conic_cliff_4dgs
+	sim_4dgs synth_4dgs formal_4dgs dse_4dgs sim_4dgs_frame eval_quality_4dgs profile_bw_4dgs stress_4dgs conic_cliff_4dgs \
+	sim_4dgs_axi synth_4dgs_axi formal_4dgs_axi
 lint: lint_ssim lint_gs
 
 lint_ssim:
@@ -119,3 +120,22 @@ stress_4dgs:
 # Phase 5b: small-determinant conic characterization through the RTL -> build/4dgs/conic/.
 conic_cliff_4dgs:
 	$(PYTHON) scripts/dse/quality_sweep.py conic --verilator "$(VERILATOR)" --jobs $(DSE_JOBS)
+
+# Phase 5c: split-fetch AXI4-Stream wrapper. Tier 1: lint + 18 wrapper-driven runs (scene x
+# Q_FRAC x T {0,1,16}) + Q8 T=3 + cache_bypass smoke with LFSR stalls; MEASURED AXI beats vs
+# MODELED prediction -> build/4dgs/axi/axi_bandwidth.{csv,json,md}.
+sim_4dgs_axi:
+	$(PYTHON) scripts/dse/axi_flow.py sim --verilator "$(VERILATOR)" --jobs $(DSE_JOBS)
+
+# Tier 2: generic-cell synthesis + CEC of the wrapper and the bare top at the same configuration,
+# by default NUM_PE=2, CACHE_WAYS=4, Q_FRAC=12 (about 2.5 h of ABC + CEC; CI overrides AXI_SYNTH
+# with the NUM_PE=1, CACHE_WAYS=2, Q_FRAC=8 synth_4dgs configuration to fit its 120-minute limit).
+AXI_SYNTH ?= --num-pe 2 --q-frac 12 --cache-ways 4
+synth_4dgs_axi:
+	$(PYTHON) scripts/dse/axi_flow.py synth $(AXI_SYNTH) $(G4_TOOLS)
+
+# Tier 3 (after Tier 2, as in DEVIN.md): composed wrapper + top (Q_FRAC=4) Z3 obligations
+# (30 s breaker, COI slicing, BMC-20).
+formal_4dgs_axi: synth_4dgs_axi build_eda
+	$(PYTHON) scripts/formal/rtl_to_netlist.py gs4d_axi --check $(FORMAL_TOOLS)
+	$(PYTHON) scripts/formal/verify_z3_4dgs_axi.py
