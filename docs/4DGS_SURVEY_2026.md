@@ -2,14 +2,24 @@
 
 Prepared for the thesis direction freeze on **30 Nov 2026**. Scope: dynamic/4D Gaussian Splatting algorithms, 3DGS/4DGS ASIC and FPGA accelerators, compression/streaming, training acceleration, temporal reuse, multi-view input reduction, and quality.
 
-**Count:** 83 new papers (§1.A) + 11 owner-provided baselines (§1.B) = 94 entries.
+**Count:** 83 new papers (§1.A) + 11 owner-provided baselines (§1.B) + 42 papers added by the coverage supplement (§1.C) = 136 entries.
+
+## Sources and coverage
+
+- **First version (§1.A):** arXiv API only. This missed most solid-state-circuit and architecture-venue papers that have no arXiv preprint (ISSCC, VLSI Symposium, A-SSCC, ESSERC, ISCAS, COOL Chips, JSSC, TCAS-I, JETCAS, SSC-L), including **measured-silicon dynamic-4DGS processors**.
+- **Supplement (§1.C), searched Nov 2026, years 2023–2026:**
+  - **IEEE Xplore and ACM Digital Library content** via the OpenAlex and Crossref metadata APIs (abstracts, DOIs, venues, dates) and the **Semantic Scholar** Graph API (batch abstracts, arXiv cross-links). Queries: "Gaussian splatting accelerator", "3DGS hardware", "4DGS chip/processor", "Gaussian splatting processor", "Gaussian splatting SLAM accelerator", "NeRF 3DGS accelerator", "radiance field accelerator", plus venue-filtered queries.
+  - **Venues checked:** VLSI Symp., ISSCC, A-SSCC, ESSERC/ESSCIRC, CICC, ISCAS, COOL Chips, Hot Chips, JSSC, TCAS-I, SSC-L, JETCAS, DAC, ICCAD, DATE, ASP-DAC, ISLPED, ISCA, MICRO, HPCA, ASPLOS, FCCM, TCAD, TODAES, TVCG. No CICC or ESSCIRC (pre-2025 name) 3DGS/4DGS paper was found; no new ASPLOS hardware paper beyond §1.A was found.
+  - **Fresh arXiv search** (cs.AR/cs.CV/cs.GR, hardware keywords above): found ISCA 2026 axis-shared rasterization (arXiv:2506.07069), HPCA 2026 GRTX (arXiv:2601.20429) and VLSI 2026 Gleanmer (arXiv:2603.29005).
+  - **Not directly reachable from this environment:** the IEEE Xplore and ACM DL web search pages, Google Scholar and DBLP (bot walls / HTTP 418, 403, 302). Their content was covered through the metadata APIs above, but a manual Xplore/Scholar pass by the owner is still advised.
+- **Evidence level of §1.C:** most §1.C papers have no open full text; their entries are written from the **abstract** (and title). Numbers not stated there are marked **unverified**, and where an abstract does not say "fabricated"/"measured", the evidence label is left **unverified** rather than guessed.
 
 ## How to read this document
 
-- **Sources:** arXiv API searches (cs.CV, cs.GR, cs.AR, cs.DC, cs.LG) over ~415 candidates; 83 papers selected and read from arXiv HTML/PDF full text. Venues (CVPR/ICCV/ECCV/NeurIPS/SIGGRAPH/ISCA/MICRO/HPCA/DAC/ASPLOS/DATE/ICCAD/TVCG …) are taken from the paper's own arXiv comment/journal-ref field; where a venue is only claimed on a project page it is marked "not verified here".
+- **Sources (§1.A):** arXiv API searches (cs.CV, cs.GR, cs.AR, cs.DC, cs.LG) over ~415 candidates; 83 papers selected and read from arXiv HTML/PDF full text. Venues (CVPR/ICCV/ECCV/NeurIPS/SIGGRAPH/ISCA/MICRO/HPCA/DAC/ASPLOS/DATE/ICCAD/TVCG …) are taken from the paper's own arXiv comment/journal-ref field; where a venue is only claimed on a project page it is marked "not verified here".
 - **Dates** are the arXiv v1 submission date (or DOI publication date for papers without arXiv).
 - **Numbers** are copied from the paper text. If a number could not be found in the text, it is written **unverified**. Numbers quoted from another paper's comparison table are labelled with that source.
-- **Hardware evidence labels** (stated for every hardware paper): **MEASURED silicon**, **MEASURED board** (FPGA), **GPU/device MEASURED** (software on real hardware), **post-layout**, **synthesis**, **SIMULATION** (cycle-level / cycle-accurate / analytical). Only Vorion (arXiv:2511.16831, minimal 16 nm prototype) reports measured silicon, and only LENS (arXiv:2610.25068, KR260) reports a measured FPGA board, among the accelerator papers here. 3DGauCIM uses measured statistics of a separate 16 nm DCIM chip inside a simulation.
+- **Hardware evidence labels** (stated for every hardware paper): **MEASURED silicon**, **MEASURED board** (FPGA), **GPU/device MEASURED** (software on real hardware), **post-layout**, **synthesis**, **SIMULATION** (cycle-level / cycle-accurate / analytical). Within §1.A, Vorion (arXiv:2511.16831, minimal 16 nm prototype) is the only measured-silicon paper and LENS (arXiv:2610.25068, KR260) the only measured FPGA board. **This is not true of the field:** §1.C adds fabricated chips — dynamic-4DGS processors Uni4D (12 nm) and Specter (28 nm) at VLSI 2026, plus the ISSCC 2026 4DGS processor; static 3DGS chips (ISSCC 2025 Tsinghua shape-aware processor, HZB-RPU, KAIST SLAM/mapping chips, SR-VLNA); and measured FPGA boards (Alveo U200 sort-free renderer, ZCU104 renderers). 3DGauCIM uses measured statistics of a separate 16 nm DCIM chip inside a simulation.
 - **Project context (not a constraint):** the repo's current RTL (deformation engine with [1, t, t²] basis, L1 motion-threshold skip, post-projection motion-aware cache) is cycle-accurate Verilator simulation with modeled DRAM traffic (~20.4–22.6% conservative external-traffic reduction). Its skip decision does not gate the deformation engine, and its cache is view-dependent. These facts are used only as motivation in §7.
 - All entries were checked for an arXiv ID or DOI and a date. Future-dated (2026) preprints are reported as they appear on arXiv.
 
@@ -617,32 +627,208 @@ Baselines are cited from the owner's notes and abstracts only; they were not re-
 | B11 | Lai, sort-free 3DGS-SLAM accelerator (master's thesis, 2026) | Thesis, 2026 | No arXiv ID / DOI (internal thesis, owner-provided) | TSMC 16 nm design + Alveo U200 FPGA (owner's note) | Lab precedent for a 16 nm + FPGA flow. Not counted toward the 50-paper minimum because it has no public ID. |
 
 
+### 1.C Supplement — papers missed by the arXiv-only search (added in the coverage supplement)
+
+Found through OpenAlex, Crossref and Semantic Scholar (IEEE Xplore / ACM DL proceedings metadata) and a re-run arXiv search. Unless stated, details come from the **abstract only** (IEEE/ACM full text was not reachable from this environment); numbers not in the abstract or title are written **unverified**. Dates are the proceedings publication date in the DOI record.
+
+#### 1.C.1 Measured-silicon and chip papers (ISSCC / VLSI / JSSC / A-SSCC / ESSERC / ISCAS / COOL Chips)
+
+#### Uni4D: A 12nm 0.16mJ/Frame 4D Gaussian Spatial Video Rendering Processor with Unified Deformation and On-Chip Hierarchical Sorting
+- **Authors:** C. Nian, X. Mo, J. Zhang, J. Peng, F. U. D. Farrukh, Y. Li, J. Wen, F. Chen et al. (Tsinghua Univ. / RITS Shenzhen) · **Venue/date:** IEEE Symp. VLSI Technology and Circuits 2026, 14 Jun 2026 · **ID:** DOI 10.1109/VLSITechnologyandCir65830.2026.11577583 (no arXiv found) · **Platform label:** **MEASURED SILICON** (fabricated 12 nm CMOS).
+- **Problem:** real-time dynamic (3D/4D) Gaussian rendering on a spatial-video device; deformation buffers, box-bounding latency and sorting traffic dominate.
+- **Method:** unified deformation engine (UniMAC) for Hex-plane sampling plus MLP deformation; K-plane Weights Segmentation (KWS) factorises 3D indexing; non-blocking key-value-pair generation engine pipelined with a hierarchical on-chip radix sorter.
+- **Key numbers (abstract):** 0.16–0.52 mJ/frame; up to 232 fps on dynamic Gaussian scenes; K-plane buffer area −84%; box-bounding latency −76%; external memory access −93.8%; ">10× lower energy than prior NeRF/3DGS processors". Dataset, resolution and PSNR: unverified.
+- **Limitations:** deformation is accelerated, not skipped — every Gaussian is still deformed every frame (from the abstract; per-Gaussian skipping not mentioned); HexPlane/MLP model family only.
+
+#### Specter: 376 fps 2.67 nJ/Pixel 4DGS Processor for Spatiotemporal Reconstruction with Contribution-Ordered Rendering and Deformation-Aware Modeling
+- **Authors:** J.-Y. Kim, T. Suh, J. Lim, M. Park, H. Choi, J. Min, D. Kim, J.-Y. Kim (KAIST, Joo-Young Kim group) · **Venue/date:** IEEE Symp. VLSI Technology and Circuits 2026, 14 Jun 2026 · **ID:** DOI 10.1109/VLSITechnologyandCir65830.2026.11577601 (no arXiv found) · **Platform label:** **MEASURED SILICON** (fabricated 28 nm CMOS, 12.96 mm² die).
+- **Problem:** 4DGS spatiotemporal reconstruction (rendering + modeling/training) on edge; redundant external memory access and computation.
+- **Method:** opacity/shape-aware bound tightening for Gaussian-to-tile allocation; contribution-ordered rendering with hierarchical skip of non-contributing operations; **hash-based deformation detection that skips modeling of non-deformed tiles**.
+- **Key numbers (abstract):** up to 376 fps at 2.67 nJ/pixel (rendering); up to 112.3 iterations/s (modeling). Dataset, resolution, PSNR: unverified.
+- **Limitations:** skip granularity is per tile and applied to **modeling** (training), per the abstract; whether rendering-side deformation fetch is skipped is unverified. Claims to be "the first 4DGS processor".
+
+#### A 0.24mJ/Frame Quadratic Interpolation 4DGS Processor with Recursive Computation Reuse and Tree-Based Parallel-Rendering (ISSCC 2026, paper 2.9)
+- **Authors:** X. Yang, Y. Wang, W. Xu, Y. Qin, H. Wang, R. Guo, Z. Yue, J. Gu et al. (Tsinghua Univ.) · **Venue/date:** IEEE ISSCC 2026, 15 Feb 2026 · **ID:** DOI 10.1109/ISSCC49663.2026.11409230 (no arXiv found) · **Platform label:** ISSCC chip paper; process node and measurement conditions **unverified** (abstract does not state them).
+- **Problem:** 4DGS memory requirement, redundant computation and low PE utilisation.
+- **Method:** adaptive quadratic interpolation (of Gaussian attributes over time), recursive computation reuse, tree-based parallel rendering.
+- **Key numbers (abstract):** 0.24 mJ/frame rendering energy; 6.11× energy-efficiency improvement on D-NeRF (baseline unverified).
+- **Limitations:** D-NeRF is synthetic, monocular and low-resolution; multi-view real datasets (N3DV/Technicolor) unverified.
+
+#### SR-VLNA: A 5.0–23.9 mJ/meter Spatial Reasoning-based Vision Language Navigation Accelerator for Embodied Agents
+- **Authors:** S. Kim, J. Park, S. Lee, H. Joo, W.-H. Park, S. Song, J. Ryu, G. Park, H.-J. Yoo et al. (KAIST, Hoi-Jun Yoo group) · **Venue/date:** IEEE Symp. VLSI Technology and Circuits 2026, 14 Jun 2026 · **ID:** DOI 10.1109/VLSITechnologyandCir65830.2026.11577427 (no arXiv preprint found) · **Platform label:** **MEASURED SILICON** (fabricated 28 nm FDSOI).
+- **Problem:** vision-language navigation for robots needs 3D semantic understanding (SU) and language planning (LP) within an embodied-agent energy budget.
+- **Method:** 3DGS-based semantic understanding + language-based planning on one chip, via four features named ESU, MRDU, CAGQU and HSAT (their internals: unverified from the abstract).
+- **Key numbers (abstract):** SU energy −7.0×, LP energy −10.9×; SU 0.004–0.021 µJ/point; LP 0.25–0.96 mJ/task ("first to demonstrate LP"); end-to-end VLN 5.0–23.9 mJ/meter.
+- **Limitations:** static 3DGS map; rendering throughput/quality numbers unverified; a robotics system chip rather than a renderer.
+
+#### A Real-time 4.31 mJ/Frame Neural-3DGS Processor with Voxel Similarity Memory Management and Opacity-based Sparsity Generation
+- **Authors:** H. Lee, W.-H. Park, S. An, J. Ryu, H.-J. Yoo (KAIST) · **Venue/date:** IEEE ISCAS 2025, 25 May 2025 · **ID:** DOI 10.1109/ISCAS56072.2025.11044299 (no arXiv found) · **Platform label:** "implemented in 28 nm CMOS" (abstract). Whether the numbers are chip-measured or post-layout is **not stated in the abstract** → evidence level unverified here (the task brief describes it as measured silicon; not confirmed from the text available).
+- **Problem:** Neural-3DGS (neural-attribute Gaussians, Scaffold-GS-like) has low energy efficiency and high latency on mobile.
+- **Method:** Voxel Similarity-aware Memory Management Unit (VSMMU); LUT-based Pre-Sort Unit (pre-computed order); Opacity-aware Gaussian Skipping Core.
+- **Key numbers (abstract):** EMA energy −59.5%, NN energy −43.3%; sort latency −64.3%; MACs −63.3%; 98.8 FPS; 4.31 mJ/frame.
+- **Limitations:** static scenes; dataset/resolution unverified.
+
+#### A 51.2 fps Real-Time 3DGS-SLAM Accelerator using Diagonal Feeding with Symmetric Alpha Reuse and Voxel-based 3D Gaussian Cache Management
+- **Authors:** H. Joo, S. Kim, J. Park, J. Ryu, H.-J. Yoo (KAIST) · **Venue/date:** IEEE ISCAS 2025, 25 May 2025 · **ID:** DOI 10.1109/ISCAS56072.2025.11043574 (no arXiv found) · **Platform label:** implementation reported at 0.9 V / 200 MHz; process node and whether silicon-measured: **unverified** from the abstract.
+- **Problem:** 3DGS-SLAM dense mapping on mobile: large α-computation and irregular memory access.
+- **Method:** diagonal-feeding controller to avoid redundant α computation; symmetric alpha reuse; voxel-based inter-frame caching (VIFC) of Gaussians across frames.
+- **Key numbers (abstract):** system computation −35.3%; external memory access −44.0% (VIFC); 51.2 fps at 0.07 µJ/point.
+- **Limitations:** static-scene SLAM; dataset unverified. VIFC is an **inter-frame, world-space (voxel) Gaussian cache** — relevant prior art for the "camera-independent cache" in §7.
+
+#### A Real-Time and Energy-Efficient 3DGS-based Geometric and Semantic Mapping Processor with 2-level Redundancy Handling for Embodied Agents
+- **Authors:** S. Kim, J. Park, H. Joo, S. Lee, W.-H. Park, S. Song, J. Ryu, G. Park et al. (KAIST) · **Venue/date:** IEEE COOL Chips 2026, 15 Apr 2026 · **ID:** DOI 10.1109/COOLCHIPS68842.2026.11557011 · **Platform label:** **MEASURED SILICON** (fabricated 28 nm FDSOI).
+- **Method:** Embedding Redundancy Handling Unit (skip occluded-object embeddings, prune channels) and **Temporal Redundancy Handling Unit that restricts mapping to moved objects via bounding boxes**.
+- **Key numbers (abstract):** computation −65.6%, memory access −77.7% (ERHU); mapping latency −93.4% (TRHU); 70.7 FPS at 0.02 µJ/point, 640×480.
+- **Limitations:** mapping (SLAM-side), not dynamic-scene rendering; object-level motion granularity.
+
+#### Gleanmer: A 6 mW SoC for Real-Time 3D Gaussian Occupancy Mapping
+- **Authors:** Z.-S. Fu, P. Z. X. Li, S. Karaman, V. Sze (MIT) · **Venue/date:** IEEE Symp. VLSI Technology and Circuits 2026, 14 Jun 2026 (arXiv 30 Mar 2026) · **ID:** arXiv:2603.29005, DOI 10.1109/VLSITechnologyandCir65830.2026.11577349 · **Platform label:** **MEASURED SILICON** (fabricated 16 nm CMOS SoC).
+- **Method:** accelerator for GMMap (Gaussian-mixture occupancy map): direct computation and reuse of compact Gaussians; approximate Gaussian arithmetic.
+- **Key numbers (abstract):** construction energy −63%, query energy −81%; area −38%; >88 fps map construction at 640×480; >540 K coordinates/s query; <6 mW.
+- **Limitations:** occupancy mapping with Gaussians, not splatting/rendering. (Missed by the first search because it is not a "splatting" paper.)
+
+#### IRIS: A 8.55mJ/frame Spatial Computing SoC for Interactable Rendering and Surface-Aware Modeling with 3D Gaussian Splatting
+- **Authors:** S. Song, S. Kim, W.-H. Park, J. Park, S. An, G. Park, M. Kim, H.-J. Yoo (KAIST) · **Venue/date:** IEEE ISSCC 2025, 16 Feb 2025 (also Hot Chips 2025, DOI 10.1109/HCS66204.2025.11154398) · **ID:** DOI 10.1109/ISSCC49661.2025.10904521 · **Platform label:** ISSCC SoC; process and measured figures beyond the title **unverified** (abstract text available is the introduction only).
+- **Problem:** interactive MR needs surface-aware modeling (>20 min on edge GPU) and rendering of **deformed** objects (>400 ms on edge GPU); EMA is 81.3% of system energy even after pruning (abstract).
+- **Key numbers:** 8.55 mJ/frame (title); others unverified.
+- **Limitations:** user-driven object deformation, not 4D video reconstruction.
+
+#### 1.78mJ/Frame 373fps 3D GS Processor Based on Shape-Aware Hybrid Architecture Using Earlier Computation Skipping and Gaussian Cache Scheduler (ISSCC 2025) / JSSC extension
+- **Authors:** X. Feng, H. Wang, C. Tang, T. Wu, H. Yang, Y. Liu (Tsinghua Univ.) · **Venue/date:** IEEE ISSCC 2025, 16 Feb 2025; extended as "An Edge 3-D Gaussian Splatting Processor Based on Shape-Aware Computation Architecture and Spatio-Temporal Gaussian Cache", IEEE JSSC, 30 Oct 2025 · **ID:** DOI 10.1109/ISSCC49661.2025.10904813; DOI 10.1109/JSSC.2025.3621015 · **Platform label:** **MEASURED SILICON** ("fabricated silicon prototype", JSSC abstract).
+- **Problem:** 3DGS reaches only 6.4 fps on Xavier NX; shape diversity causes input-dependent wasted work; irregular off-chip Gaussian/SH access.
+- **Method:** shape-aware reconfigurable rasterization–interpolation architecture; online shape-aware early skipping controller; **spatio-temporal Gaussian cache** for EMA.
+- **Key numbers:** 373 fps max; 1.78 mJ/frame (title). Process node: unverified.
+- **Limitations:** static scenes.
+
+#### A Modeling/Rendering Unified 3DGS Processor Based on Locality-Optimized Computation and Reconfigurable Architecture
+- **Authors:** X. Feng, H. Wang, S. Xiao, H. Yang, Y. Liu (Tsinghua Univ.) · **Venue/date:** IEEE JSSC 2026 · **ID:** DOI 10.1109/JSSC.2026.3737807 · **Platform label:** JSSC chip paper; numbers **unverified** (abstract truncated in the record).
+- **Method:** feed-forward 3DGS modeling + rendering on one reconfigurable processor; locality-aware fine-grained rendering engine; dataflow that removes Gather-related EMA.
+- **Limitations:** static scenes; numbers unverified.
+
+#### HZB-RPU: A 168fps 0.396frame/mJ End-to-End Pipeline 3D Gaussian Splatting Processor
+- **Authors:** X. Chen, W. Zheng, T. Jiao, Y. Shi, Y. Zhou, S. Li, X. Li, J. Yang (Southeast Univ.) · **Venue/date:** IEEE ESSERC 2026, Sep 2026 · **ID:** DOI 10.1109/ESSERC71398.2026.11782044 · **Platform label:** **MEASURED SILICON** ("verified in silicon"); process unverified.
+- **Method:** hot-zone based rendering that removes irregular EMA (on-chip cache requirement −99.43%); multi-level skipping; intra-tile assisting.
+- **Key numbers (abstract/title):** 168 fps; 0.396 frame/mJ; redundant computation −48%; PE utilisation 1.73×; 1.18× throughput, 4.37× area efficiency, 1.72× energy efficiency vs SOTA.
+- **Limitations:** static scenes.
+
+#### Garnet: A 10.1 mJ/iter 3DGS Modeling Accelerator with Gradient Similarity-based Skipping and Unified Volume Rendering Core
+- **Authors:** J. Park, S. Kim, S. Song, W.-H. Park, J. Ryu, H.-J. Yoo (KAIST) · **Venue/date:** IEEE A-SSCC 2025, 2 Nov 2025 · **ID:** DOI 10.1109/A-SSCC67472.2025.11349567 · **Platform label:** A-SSCC chip paper; process/measurement **unverified**.
+- **Key numbers:** 10.1 mJ/iteration (title); volume rendering = 62.9% of modeling energy/latency breakdown (abstract, rest truncated).
+- **Limitations:** static-scene training. Related: **COOL-Splat** (same group, COOL Chips 2026, DOI 10.1109/COOLCHIPS68842.2026.11556939): masked training by projected-gradient interpolation, bi-directional rendering core, mixed-precision units; 10.1 mJ/iter, 1.49× over SOTA (abstract); evidence level unverified.
+
+#### MobileSplat: A 105 FPS 3DGS Rendering FPGA Processor with Mixed Precision Computation Path and Pre-culling Architecture
+- **Authors:** C. Nian, X. Mo, J. Zhang, J. Peng, F. U. D. Farrukh, L. Lu, F. Chen et al. (Tsinghua / RITS) · **Venue/date:** IEEE A-SSCC 2025, 2 Nov 2025 · **ID:** DOI 10.1109/A-SSCC67472.2025.11349500 · **Platform label:** FPGA processor (board measurement presumed, unverified).
+- **Problem (abstract):** α-blending >70% of compute; AABB tile assignment misallocates >40% of Gaussians; tile-based EMA runs at ~⅓ of sequential efficiency.
+- **Key numbers:** 105 FPS (title); others unverified. Related, same group: **HyperGS** (ISCAS 2025, DOI 10.1109/ISCAS56072.2025.11044261; 20.76–43.38 FPS at 19.2 GB/s, 44× perf / 84× lower power vs Jetson GPUs; platform unverified), **GS-Threads** (IEEE TCAS-I 2026, DOI 10.1109/TCSI.2026.3718008; MEASURED on ZCU104 board: 116 FPS at 800×800, 2.69 W PL, 23.1 mJ/frame), and an SB-illumination rendering processor (IEEE SSC-L 2026, DOI 10.1109/LSSC.2026.3676726; MEASURED on ZCU104: 34.12 dB, 116–138 FPS at 800×800, 3.21–3.85 W).
+
+#### A 66.6 FPS High Quality Gaussian Splats Rendering FPGA Processor with Reconfigurable Computation Architecture
+- **Authors:** H. Lee, G. Park, W.-H. Park, W. Jo, J. Park, H.-J. Yoo (KAIST) · **Venue/date:** IEEE A-SSCC 2024, 18 Nov 2024 · **ID:** DOI 10.1109/A-SSCC60305.2024.10848911 · **Platform label:** FPGA processor (board, presumed; unverified).
+- **Key numbers:** 66.6 FPS (title); others unverified. Earliest solid-state-venue 3DGS processor found.
+
+#### A High-Throughput FPGA Accelerator for Real-Time Sort-Free 3-D Gaussian Splatting
+- **Authors:** G.-W. Lai, Y.-C. Hu, C.-Y. Kuo, W.-C. Cheng, Y.-C. Wu (NYCU) · **Venue/date:** IEEE TCAS-I, 14 Aug 2026 (FCCM 2026 Reconfigurable Computing Challenge version, DOI 10.1109/FCCM68464.2026.00073) · **ID:** DOI 10.1109/TCSI.2026.3722569 · **Platform label:** **MEASURED BOARD** (AMD-Xilinx Alveo U200).
+- **Method:** sort-free weighted-sum accumulation, Gaussian pruning, SH analysis, scale-adaptive covariance unit, width predictor.
+- **Key numbers (abstract):** 637.6 FPS at 2.7 W, 60 MHz; 4.77–7.97× energy efficiency over prior FPGA renderers; pruning −64–80% Gaussians at <1.35 dB loss, >30 dB PSNR; latency −57.5%.
+- **Limitations:** static; quality loss of sort-free blending. Probably the published form of baseline B11 (same lab, U200) — inferred from authors/platform, not confirmed.
+
+#### 1.C.2 Architecture / accelerator papers (ISCA / MICRO / HPCA / DAC / ICCAD / ASP-DAC / DATE / TCAD / JETCAS / TVCG)
+
+#### Relay-GS: Reusing Temporal Sort Information for 4D Gaussian Splatting Acceleration
+- **Authors:** Y. Kim, S. Ki, S. Jeon, S. Ryu (Sogang Univ.) · **Venue/date:** ACM/IEEE DAC 2026, 26 Jul 2026 · **ID:** DOI 10.1145/3770743.3804261 (no arXiv found) · **Platform label:** accelerator vs. "baseline design"; simulation/synthesis level **unverified**.
+- **Problem / method:** 4DGS rendering re-sorts every frame; Relay-GS reuses the previous frame's sort order (temporal sort reuse) with algorithm–hardware co-design.
+- **Key numbers (abstract):** 1.55–1.64× speedup and up to 16.5% energy saving over a baseline design, negligible quality loss vs full sorting.
+- **Limitations:** reuses **sorting**, not deformation or attribute fetch.
+
+#### Efficient 3D Gaussian Splatting with Axis-Shared Rasterization and Order-independent Transmittance
+- **Authors:** Z. Wang, G. He, L. Gao, D. Liu, S. X. Hu, C. Zhang · **Venue/date:** ISCA 2026 (arXiv comment); arXiv v1 8 Jun 2025 · **ID:** arXiv:2506.07069 · **Platform label:** accelerator evaluation level (simulation/synthesis) **unverified** from the abstract.
+- **Method:** axis-shared rasterization (pre-compute and reuse X/Y-axis common terms, MACs −up to 38%); order-independent transmittance via a lightweight MLP that removes sorting; unified reconfigurable PE array for rasterization + MLP.
+- **Key numbers (abstract):** 1.33–1.88× speedup over SOTA 3DGS accelerators at preserved quality.
+- **Limitations:** static 3DGS; MLP transmittance approximation must be trained per scene (inferred).
+
+#### GauTracer: Extending Ray Tracing Accelerator for Gaussian-Based Scene Representation
+- **Authors:** L. Wu, K. Zou, Y. Lin, C. Chen et al. (Fudan) · **Venue/date:** ISCA 2026, 1 Jun 2026 · **ID:** DOI 10.1109/ISCA66397.2026.00142 · **Platform label:** **SIMULATION** (Vulkan-Sim).
+- **Key numbers (abstract):** 5.8× (3D Gaussians) / 7.3× (2D Gaussians) speed-up and 6.6× / 7.5× energy efficiency over baseline GPU ray-tracing accelerator.
+- **Limitations:** static; ray-tracing path. Related: **GRTX** (HPCA 2026, arXiv:2601.20429, 28 Jan 2026; BVH of unit spheres via ray-space transform + traversal checkpointing in RT units; "negligible hardware cost"; numbers unverified from abstract).
+
+#### GauSPU: 3D Gaussian Splatting Processor for Real-Time SLAM Systems
+- **Authors:** L. Wu, H. Zhu, S. He, J. Zheng et al. (Fudan) · **Venue/date:** MICRO 2024, 2 Nov 2024 · **ID:** DOI 10.1109/MICRO61859.2024.00114 · **Platform label:** GPU + accelerator, evaluation level **unverified**.
+- **Key numbers (abstract):** 33.6 FPS real-time 3DGS-SLAM tracking (GPU+GauSPU). Limitations: static SLAM.
+
+#### GSArch: Breaking Memory Barriers in 3D Gaussian Splatting Training via Architectural Support
+- **Authors:** H. He, G. Li, F. Liu, L. Jiang et al. · **Venue/date:** HPCA 2025, 1 Mar 2025 · **ID:** DOI 10.1109/HPCA61900.2025.00037 · **Platform label:** **unverified** (abstract truncated).
+- **Problem:** backward pass of 3DGS training ignored by GSCore; targets online learning for dynamic environments. Numbers unverified.
+
+#### Cambricon-GS: An Accelerator for 3D Gaussian Splatting Training With Gaussian-Pixel Hybrid Parallelism
+- **Authors:** R. Wen, Z. Yue, T. Liu, X. Song et al. (Cambricon / CAS) · **Venue/date:** HPCA 2026, 31 Jan 2026 · **ID:** DOI 10.1109/HPCA68181.2026.11408562 · **Platform label:** **unverified**.
+- **Key numbers (abstract):** α-computation = 71.25% of training workload, 93.03% of it invalid; workload reduced to 17.99%. Speed-up numbers unverified.
+
+#### ORANGE: Accelerating 3DGS on NPUs with GEMM
+- **Authors:** H. Li, Y. Liang, F. Liu, B. Zhu et al. (SJTU / ZJU) · **Venue/date:** HPCA 2026, 31 Jan 2026 · **ID:** DOI 10.1109/HPCA68181.2026.11408575 · **Platform label:** **unverified**.
+- **Problem:** 3DGS DSAs cannot run co-located DNNs (avatar pose, semantics); ORANGE maps 3DGS onto NPU GEMM units. Numbers unverified.
+
+#### REACT3D: Real-time Edge Accelerator for Incremental Training in 3D Gaussian Splatting based SLAM Systems
+- **Authors:** H. Wang, Z. Zhu, T. Zhao, Y. Xiang et al. (HKUST / Tsinghua) · **Venue/date:** MICRO 2025, 17 Oct 2025 · **ID:** DOI 10.1145/3725843.3756109 · **Platform label:** **unverified**.
+- **Problem:** 3DGS-SLAM mapping must sustain >30 FPS incremental training. Numbers unverified.
+
+#### Local-GS / CFoM-GS / GSNorm (Peking Univ., Le Ye / Tianyu Jia groups)
+- **Local-GS** (DAC 2025, 22 Jun 2025, DOI 10.1109/DAC63849.2025.11132792): order-independent training accelerator; **implemented in 7 nm** (synthesis/post-layout level unverified); 26.9–53× training speed-up vs Jetson NX.
+- **CFoM-GS** (ISLPED 2026, 5 Aug 2026, DOI 10.1145/3816440.3818563): anchor-GS training accelerator; commercial 22 nm implementation; 22× throughput vs Jetson NX.
+- **GSNorm** (ASP-DAC 2025, 20 Jan 2025, DOI 10.1145/3658617.3697781): splat normalization + LUT-based exponent; TSMC 22 nm implementation; numbers unverified.
+- **Limitations:** static scenes; evidence level (synthesis vs layout) unverified for all three.
+
+#### GSAcc: Accelerate 3D Gaussian Splatting via Depth Speculation and Gaussian-centric Rasterization
+- **Authors:** M. Yang, Y. Wang, C.-P. Lo, X. Zhang et al. (UT Austin) · **Venue/date:** DAC 2025, 22 Jun 2025 · **ID:** DOI 10.1109/DAC63849.2025.11133032 · **Platform label:** **synthesis** (Intel16 PDK).
+- **Key numbers (abstract):** up to 1.66×10⁴ PPA and 48.7× energy vs desktop GPU on compressed 3DGS models.
+
+#### GauPRE / GauPIM (Fudan)
+- **GauPRE** (ICCAD 2025, 26 Oct 2025, DOI 10.1109/ICCAD66269.2025.11240948): pattern-based rasterization engine integrated with GPU; 11.6× end-to-end over Jetson Orin Nano at 0.1% area overhead; evaluation level unverified.
+- **GauPIM** (IEEE JETCAS 2026, DOI 10.1109/JETCAS.2026.3718928): voxel-streaming PIM processor; 3.46× average latency over GSCore; simulation (inferred).
+
+#### CODA / "Is 2D Gaussian Enough?" / FAMERS (Fudan, Jun Yu group)
+- **FAMERS** (DATE 2025, 31 Mar 2025, DOI 10.23919/DATE64628.2025.10993091): tile-based edge FPGA renderer on Xilinx XC7K325T; **MEASURED board** presumed (implementation on FPGA); 1.99× (comparison target unverified).
+- **"Is 2D Gaussian Enough?"** (DAC 2026, 26 Jul 2026, DOI 10.1145/3770743.3804096) and **CODA** (IEEE TCAD 2026, DOI 10.1109/TCAD.2026.3748870): 2DGS nearest-surface depth pass guides sort-free weighted 3DGS rendering; numbers unverified.
+
+#### StereoGS: An Energy-Efficient 3D Gaussian Splatting Stereoscopic Rendering Processor
+- **Authors:** S. Song, H.-J. Yoo et al. (KAIST) · **Venue/date:** IEEE JETCAS 2026 · **ID:** DOI 10.1109/JETCAS.2026.3709345 · **Platform label:** **unverified** (journal processor paper).
+- **Key numbers (abstract):** 112.2 FPS at 1552×1040 per eye; off-chip bandwidth −61.8%; 15.8× energy efficiency over SOTA (baseline unverified). Method: Gaussian streaming + pre-blended fragment warping between eyes (inter-view reuse).
+
+#### Other architecture papers found (short)
+- **BOA-3DGS** (ASP-DAC 2026, DOI 10.1109/ASP-DAC66049.2026.11420496): backward-rasterization training accelerator; numbers unverified.
+- **BitSplat** (IEEE JETCAS 2026, DOI 10.1109/JETCAS.2026.3720313): IEEE-754 bit-level Bitcast-FMA exponent; numbers unverified.
+- **GSReuse** (IEEE TVCG 2026, 1 Apr 2026, DOI 10.1109/TVCG.2026.3679889): drop-in screen-space temporal reuse across consecutive frames for 3DGS; GPU software; numbers unverified.
+- **Venue updates for papers already in §1.A** (from DOI records): Gaussian Blending Unit → HPCA 2025 (DOI 10.1109/HPCA61900.2025.00036); GS-TG, GauRast, StreamingGS → DAC 2025; GCC → MICRO 2025 (DOI 10.1145/3725843.3756072); Splatonic → HPCA 2026; 3DGauCIM → ACM TODAES (DOI 10.1145/3793555); 129 FPS Full-HD accelerator → IEEE TVCG 2026; FLICKER → DATE 2026; GEMM-GS → DAC 2026.
+
+#### 1.C.3 NeRF silicon (related work, not catalogued in full)
+KAIST's NeRF processors (MetaVRain ISSCC 2023, NeRF-Navi and successors) are the predecessors of the KAIST 3DGS chips above; they are listed as related work only and were not re-read.
+
 ## 2. Top 20 papers, ranked, with one concrete technique to reuse
 
-Ranking criterion: value for a 2.5-year master's thesis on **edge acceleration of dynamic (4D) Gaussian Splatting**, weighted by (a) dynamic-scene relevance, (b) evidence strength (measured > post-layout > simulation), (c) how directly the technique can be put in hardware.
+Ranking criterion: value for a 2.5-year master's thesis on **edge acceleration of dynamic (4D) Gaussian Splatting**, weighted by (a) dynamic-scene relevance, (b) evidence strength (measured > post-layout > simulation), (c) how directly the technique can be put in hardware. **Re-ranked after the coverage supplement:** the measured 4DGS chips (Specter, Uni4D, ISSCC 2026 4DGS) and temporal-reuse hardware (Relay-GS, KAIST voxel inter-frame cache) enter; GCC, Lumina, STREAMINGGS, ElsaGS, OMG4, Temporal Gaussian Hierarchy and GS-TG drop out (still catalogued in §1.A).
 
 | Rank | Paper | ID | Evidence | Technique to learn / reuse |
 |---|---|---|---|---|
-| 1 | GSPIM (baseline) | arXiv:2611.04804 | Simulation | Filter temporally inactive 4D Gaussians **before** they cross the memory bus, and render several adjacent frames from one shared active set (multi-frame dataflow). |
-| 2 | CueSplat (baseline) | arXiv:2611.22095 | GPU measured | Predict attributes from history and run exact deformation only for a Top-k budget picked by a tiny router; refresh on drift. Gives 1.75–6.74× on Orin with ≤0.16 dB loss. |
-| 3 | DeGS | arXiv:2608.02099 | Cycle-level sim | Decouple workload parsing / reorganization / blending so PEs stay busy (23.9% → 90.2% utilization on dynamic scenes). Shows deformation ("materialization") is still un-accelerated. |
-| 4 | Neo | arXiv:2511.12930 | Sim + 7 nm synth | Reuse-and-update sorting: keep last frame's per-tile order and patch it; sort traffic 346.5 GB → 19.6 GB per 60 frames. |
-| 5 | 3DGauCIM | arXiv:2507.19133 | Sim on measured 16 nm DCIM data | DRAM-access-reduction frustum culling (cull from compact bounds before fetching full parameters) for dynamic scenes; 211 FPS @0.63 W. |
-| 6 | Vorion | arXiv:2511.16831 | **Measured silicon** (16 nm) | Only 3DGS silicon in the set: shows what a student-scale tape-out (4 mm² die, 6.4–19 FPS) actually achieves vs simulated claims. |
-| 7 | LENS | arXiv:2610.25068 | **Measured board** (KR260) | INT16/fixed-point 3DGS that survives on a 3.9 W FPGA with 34.11 dB — template for an FPGA-first evaluation. |
-| 8 | SCARF | arXiv:2611.02365 | 28 nm post-layout | Scene-adaptive early sparsification and depth reuse: 41–62% DRAM traffic reduction with <0.072% PSNR change. |
-| 9 | Mobile-4DGS | arXiv:2610.05289 | Device measured | Its reuse-vs-drift table (0% → 90.2% reuse: 124.7 → 7.2 ms/s, drift 0.01 → 1.28) is the clearest published curve of the temporal-reuse trade-off. |
-| 10 | VersionGS | arXiv:2611.33374 | GPU measured | Versioned Gaussian dictionary per GOP: unchanged Gaussians keep their version → representation-level reuse that is camera-independent. |
-| 11 | CC-4DGS | arXiv:2609.02184 | GPU measured | Compute the deformation hash instead of storing it (1–3 MB deformation, 33.3 dB, 64 FPS) — trades DRAM for logic, ideal for ASIC. |
-| 12 | 4DGS-1K | arXiv:2503.16422 | GPU measured | Key-frame-shared temporal mask of active Gaussians + pruning of short-lifespan Gaussians. |
-| 13 | ResStreamGS | arXiv:2610.21121 | Phone measured | Split static (send once) vs dynamic (video-coded residual) Gaussians: +7.5–8.4 dB and −56.5% payload, 30.9 FPS on Snapdragon 778G. |
-| 14 | GCC | arXiv:2507.15300 | 28 nm synth + sim | Gaussian-wise rendering with cross-stage conditional preprocessing — never preprocess a Gaussian that rendering will not use. |
-| 15 | Lumina | arXiv:2506.05682 | Sim | Radiance cache keyed on Gaussian color integration; temporal sort sharing (S²). |
-| 16 | STREAMINGGS | arXiv:2506.09070 | 32 nm synth + sim | Memory-centric voxel-ordered streaming: each Gaussian fetched once per frame. |
-| 17 | ElsaGS | arXiv:2611.22059 | 8 nm synth + sim | Progressive freezing of converged Gaussians + frozen-Gaussian cache for training hardware (up to 90% frozen). |
-| 18 | OMG4 | arXiv:2510.03857 | GPU | 4D model 2 GB → ~3 MB: shows storage is a software-solved problem, so the hardware should consume compact models. |
-| 19 | Temporal Gaussian Hierarchy | arXiv:2412.09608 | GPU measured | Temporal level-of-detail: slow content at coarse temporal levels, so only active segments are loaded (18,000 frames in 2.2 GB). |
-| 20 | GS-TG | arXiv:2509.00911 | 28 nm synth + sim | Group small tiles for one sort and keep a per-Gaussian bitmask for fine rasterization. |
+| 1 | Specter (§1.C) | DOI 10.1109/VLSITechnologyandCir65830.2026.11577601 | **Measured silicon** (28 nm) | Closest prior art to §7: hash-based deformation detection that skips modeling of non-deformed tiles, plus contribution-ordered rendering; 376 fps, 2.67 nJ/pixel. Read the full paper first. |
+| 2 | GSPIM (baseline) | arXiv:2611.04804 | Simulation | Filter temporally inactive 4D Gaussians **before** they cross the memory bus, and render several adjacent frames from one shared active set (multi-frame dataflow). |
+| 3 | Uni4D (§1.C) | DOI 10.1109/VLSITechnologyandCir65830.2026.11577583 | **Measured silicon** (12 nm) | The silicon baseline to beat: unified HexPlane+MLP deformation engine, K-plane weight segmentation, on-chip hierarchical sort; 0.16–0.52 mJ/frame, up to 232 fps, EMA −93.8%. |
+| 4 | CueSplat (baseline) | arXiv:2611.22095 | GPU measured | Predict attributes from history and run exact deformation only for a Top-k budget picked by a tiny router; refresh on drift. Gives 1.75–6.74× on Orin with ≤0.16 dB loss. |
+| 5 | ISSCC 2026 4DGS processor (§1.C) | DOI 10.1109/ISSCC49663.2026.11409230 | ISSCC chip (details unverified) | Quadratic temporal interpolation + recursive computation reuse across time; 0.24 mJ/frame, 6.11× on D-NeRF. |
+| 6 | Relay-GS (§1.C) | DOI 10.1145/3770743.3804261 | Unverified (DAC) | Reuse the previous frame's sort order in a 4DGS renderer: 1.55–1.64×, −16.5% energy. |
+| 7 | DeGS | arXiv:2608.02099 | Cycle-level sim | Decouple workload parsing / reorganization / blending so PEs stay busy (23.9% → 90.2% utilization on dynamic scenes). States deformation ("materialization") is un-accelerated in its design. |
+| 8 | Neo | arXiv:2511.12930 | Sim + 7 nm synth | Reuse-and-update sorting: keep last frame's per-tile order and patch it; sort traffic 346.5 GB → 19.6 GB per 60 frames. |
+| 9 | 51.2 fps 3DGS-SLAM accelerator, Joo et al. (§1.C) | DOI 10.1109/ISCAS56072.2025.11043574 | Unverified (ISCAS) | Voxel-based inter-frame (world-space) Gaussian cache: EMA −44.0% — the static-scene precedent of a camera-independent cache. |
+| 10 | 3DGauCIM | arXiv:2507.19133 | Sim on measured 16 nm DCIM data | DRAM-access-reduction frustum culling (cull from compact bounds before fetching full parameters) for dynamic scenes; 211 FPS @0.63 W. |
+| 11 | Shape-aware 3DGS processor, ISSCC 2025 / JSSC (§1.C) | DOI 10.1109/JSSC.2025.3621015 | **Measured silicon** | Spatio-temporal Gaussian cache + online early skipping; 373 fps, 1.78 mJ/frame. |
+| 12 | Sort-free FPGA 3DGS, NYCU (§1.C) | DOI 10.1109/TCSI.2026.3722569 | **Measured board** (Alveo U200) | Same lab and board as the planned FPGA step: 637.6 FPS at 2.7 W — direct FPGA baseline. |
+| 13 | Vorion | arXiv:2511.16831 | **Measured silicon** (16 nm) | Shows what a student-scale tape-out (4 mm² die, 6.4–19 FPS) achieves vs simulated claims. |
+| 14 | LENS | arXiv:2610.25068 | **Measured board** (KR260) | INT16/fixed-point 3DGS that survives on a 3.9 W FPGA with 34.11 dB — template for an FPGA-first evaluation. |
+| 15 | SCARF | arXiv:2611.02365 | 28 nm post-layout | Scene-adaptive early sparsification and depth reuse: 41–62% DRAM traffic reduction with <0.072% PSNR change. |
+| 16 | Mobile-4DGS | arXiv:2610.05289 | Device measured | Its reuse-vs-drift table (0% → 90.2% reuse: 124.7 → 7.2 ms/s, drift 0.01 → 1.28) is the clearest published curve of the temporal-reuse trade-off. |
+| 17 | VersionGS | arXiv:2611.33374 | GPU measured | Versioned Gaussian dictionary per GOP: unchanged Gaussians keep their version → representation-level reuse that is camera-independent. |
+| 18 | CC-4DGS | arXiv:2609.02184 | GPU measured | Compute the deformation hash instead of storing it (1–3 MB deformation, 33.3 dB, 64 FPS) — trades DRAM for logic, ideal for ASIC. |
+| 19 | 4DGS-1K | arXiv:2503.16422 | GPU measured | Key-frame-shared temporal mask of active Gaussians + pruning of short-lifespan Gaussians. |
+| 20 | ResStreamGS | arXiv:2610.21121 | Phone measured | Split static (send once) vs dynamic (video-coded residual) Gaussians: +7.5–8.4 dB and −56.5% payload, 30.9 FPS on Snapdragon 778G. |
+
+**SR-VLNA (VLSI 2026, measured 28 nm FDSOI)** is not ranked: it runs a static 3DGS map for robot vision-language navigation, so it does not help a dynamic renderer. It matters as related work: it shows the KAIST group (also behind the 51.2 fps SLAM accelerator, the COOL Chips 2026 mapping processor with moved-object-only mapping, and IRIS) is moving 3DGS silicon into robotics/SLAM, which is direction 25 in §6.
 
 ## 3. Solved vs. unsolved matrix
 
@@ -650,17 +836,17 @@ Legend: **Solved** = a measured result meets the need on an edge platform; **Par
 
 | Problem | Status | Best evidence | What is missing |
 |---|---|---|---|
-| Deformation compute | Partial | CueSplat 1.75–6.74× (Orin, software); CC-4DGS computational hash | No hardware that **skips** exact deformation per Gaussian; DeGS states materialization is not accelerated. Nobody yet in ASIC. |
-| Temporal reuse | Partial | Neo (sort order), Lumina (radiance), GSPIM (active set), Mobile-4DGS (DOC) | Reuse of **deformed 3D state** across frames in hardware; all HW reuse so far is post-projection or sort-order. |
-| Sorting | Solved for static (sim) | GSCore 15.86×, Neo −94.4% sort traffic, sort-free WSR | Sort cost under dynamic depth changes is unmeasured on silicon. |
+| Deformation compute | Partial | Uni4D (12 nm) and ISSCC 2026 4DGS processor accelerate deformation on silicon; Specter skips **modeling** of non-deformed tiles via hash-based detection; CueSplat 1.75–6.74× (Orin, software) | Per-Gaussian skipping of exact deformation **in the rendering path, before parameter fetch**, is not reported in any abstract found (Specter's full text must be checked). DeGS states materialization is not accelerated. |
+| Temporal reuse | Partial | Neo (sort order), Relay-GS (4DGS sort reuse, DAC 2026), ISSCC 2026 recursive computation reuse, Lumina (radiance), GSPIM (active set), Mobile-4DGS (DOC), Joo et al. voxel inter-frame cache (static SLAM) | Reuse of **deformed 3D state** across frames for dynamic scenes in hardware was not found. |
+| Sorting | Solved for static (sim); measured on 4DGS silicon | GSCore 15.86×, Neo −94.4% sort traffic, sort-free WSR; Uni4D on-chip hierarchical radix sort (silicon); Relay-GS temporal sort reuse | Temporal sort reuse (Neo, Relay-GS) is not yet on measured silicon. |
 | Bandwidth | Partial | GSPIM PIM filtering; SCARF −41–62% DRAM; STREAMINGGS | All simulated; requires PIM DRAM (GSPIM) or static scenes. |
 | Storage | Solved (software) | OMG4 2 GB → 3 MB; CC-4DGS ~30 MB at 33.3 dB; MEGA −40% vs STG | Hardware that decodes these compact formats on the fly. |
 | Transmission | Partial | ResStreamGS 30.9 FPS on phone; QUEEN 0.6 MB/frame; 4DGC 0.5 MB/frame; V³ | Phone render time (V³ 37 ms) dominates; no ASIC for decode+render. |
-| Training | Partial | 3DGStream/QUEEN/DecoGS/S²GS streaming; ElsaGS, HiGS, SprintGS for static | No accelerator for **4D** or streaming per-frame training. |
+| Training | Partial | 3DGStream/QUEEN/DecoGS/S²GS streaming; Specter 4DGS modeling up to 112.3 it/s (silicon); GSArch, Cambricon-GS, Local-GS, Garnet, ElsaGS, HiGS, SprintGS for static | Specter is the only 4D training/modeling hardware found; streaming per-frame (3DGStream-style) training hardware not found. |
 | Input views | Unsolved | 6-camera challenge 29.75 dB with generative views; D²-4DGS; Phase-DGS (unsynced, +6.5 dB) | Sparse-view 4DGS still needs heavy priors (depth nets, diffusion) — far from edge real-time. |
-| Cache hit rate | Unsolved | Repo's own post-projection cache collapses under camera motion; Lumina needs continuous video | Camera-independent (canonical/world-space) cache keyed by Gaussian ID — nobody yet. |
+| Cache hit rate | Partial | Joo et al. voxel-based inter-frame Gaussian cache (−44.0% EMA) and Tsinghua spatio-temporal Gaussian cache (silicon) — both static scenes; repo's own post-projection cache collapses under camera motion; Lumina needs continuous video | A camera-independent cache of **deformed 4D state** keyed by Gaussian ID was not found. |
 | Dynamic-scene quality | Partial | VersionGS (+2.7 dB fast motion), MoE-GS 32.82 dB N3V, GaussianSpline | Fast motion still costs 1.1–4.0 dB in smooth-motion models; best quality models are the slowest (MoE-GS 44 FPS). |
-| Edge real-time | Partial | 3DGauCIM 211 FPS @0.63 W (sim); CueSplat 30.91 FPS on Orin NX (one pair); LENS/Vorion measured but static | No measured board or silicon result for a **dynamic** 4DGS renderer. |
+| Edge real-time | Solved on silicon (rendering) | Specter 376 fps, 2.67 nJ/pixel (28 nm); Uni4D up to 232 fps, 0.16–0.52 mJ/frame (12 nm); ISSCC 2026 4DGS 0.24 mJ/frame; 3DGauCIM 211 FPS @0.63 W (sim); CueSplat 30.91 FPS on Orin NX | Datasets, resolutions and PSNR of the silicon results are unverified from abstracts; no measured FPGA board for a dynamic 4DGS renderer was found. |
 
 ## 4. Method-family comparison and verdict
 
@@ -686,9 +872,9 @@ Numbers come from different papers, datasets and GPUs; they are comparable only 
 
 | Rank | Stage | Evidence of share / payoff | Who attacked it |
 |---|---|---|---|
-| 1 | Parameter fetch + temporal filtering (DRAM) | 52.4–63.3% of Orin execution time for 4D-primitive models (GSPIM); RTGS: traffic concentrates in L2 (43.6%) vs DRAM 21.5% utilisation | GSPIM, 3DGauCIM, STREAMINGGS, SCARF |
-| 2 | Deformation evaluation (MLP/HexPlane models) | Skipping it gives 1.75–6.74× end-to-end on Orin (CueSplat) → it dominates those models | CueSplat (software only) |
-| 3 | Sorting | 346.5 GB sort traffic per 60 frames on Orin at high res (Neo) | GSCore, Neo, GS-TG, sort-free WSR |
+| 1 | Parameter fetch + temporal filtering (DRAM) | 52.4–63.3% of Orin execution time for 4D-primitive models (GSPIM); RTGS: traffic concentrates in L2 (43.6%) vs DRAM 21.5% utilisation | GSPIM, 3DGauCIM, STREAMINGGS, SCARF; Uni4D (EMA −93.8%, silicon) |
+| 2 | Deformation evaluation (MLP/HexPlane models) | Skipping it gives 1.75–6.74× end-to-end on Orin (CueSplat) → it dominates those models | CueSplat (software skipping); Uni4D and ISSCC 2026 4DGS processor (deformation engines, silicon); Specter (tile-level modeling skip, silicon) |
+| 3 | Sorting | 346.5 GB sort traffic per 60 frames on Orin at high res (Neo) | GSCore, Neo, GS-TG, sort-free WSR; Uni4D on-chip hierarchical sort; Relay-GS (4DGS sort reuse) |
 | 4 | Alpha blending / rasterization | Main bottleneck for static scenes on Orin NX (GBU); PE utilisation only 23.9% on dynamic scenes (DeGS) | GBU, DeGS, FLICKER, GEMM-GS |
 | 5 | Preprocessing / projection | Many preprocessed Gaussians never used (GCC) | GCC, LS-Gaussian |
 | 6 | Decode + transmission (streaming) | Phone: download 16.8 ms, decode 13.6 ms, render 37.0 ms per frame (V³) | V³, ResStreamGS, 4DGCPro |
@@ -699,8 +885,8 @@ Numbers come from different papers, datasets and GPUs; they are comparable only 
 
 | # | Target | Mechanism | Existing paper | Expected gain | Difficulty |
 |---|---|---|---|---|---|
-| 1 | Deformation compute | Hardware Top-k exact deformation + history predictor + drift refresh (CueSplat in silicon) | CueSplat (SW only) → **nobody yet in HW** | 2–7× compute, energy | Medium |
-| 2 | Cache hit rate | Canonical/world-space cache of **deformed 3D attributes** keyed by Gaussian ID, independent of camera | **Nobody yet** (repo cache is post-projection) | Hit rate survives camera motion | Medium |
+| 1 | Deformation compute | Hardware Top-k exact deformation + history predictor + drift refresh (CueSplat in silicon) | CueSplat (SW only); Specter tile-level modeling skip and Uni4D/ISSCC 2026 deformation engines on silicon → per-Gaussian render-side skip **not found** | 2–7× compute, energy | Medium |
+| 2 | Cache hit rate | Canonical/world-space cache of **deformed 3D attributes** keyed by Gaussian ID, independent of camera | Joo et al. voxel inter-frame cache and Tsinghua spatio-temporal cache (static) → deformed-4D-state cache **not found** (repo cache is post-projection) | Hit rate survives camera motion | Medium |
 | 3 | Bandwidth | Compact per-Gaussian lifespan/motion bounds read first; full record fetched only if active (filter-before-fetch without PIM) | GSPIM (PIM), 3DGauCIM (static culling) | DRAM bytes −50%+ (inferred from 52–63% filter share) | Medium |
 | 4 | Bandwidth | Multi-frame rendering: render 2–4 frames per active-set fetch | GSPIM | Amortised fetch | Medium |
 | 5 | Sorting | Reuse-and-update sort across time and across stereo views | Neo (static) | Sort traffic −80–94% | Medium |
@@ -710,7 +896,7 @@ Numbers come from different papers, datasets and GPUs; they are comparable only 
 | 9 | Storage | Computed (not stored) deformation hash on chip | CC-4DGS (SW) | Deformation storage 1–3 MB | Medium |
 | 10 | Storage | Static/dynamic split: 3D Gaussians for static, 4D only where needed | 3D-4DGS, 4DGS-1K | Fewer 4D Gaussians | Low |
 | 11 | Storage | On-chip decoder for quantised / codebook / PCA attributes | OMG4, LightGaussian, InterGS+ | 10–600× smaller model in DRAM | Medium |
-| 12 | Transmission | Hardware path from video-decoder output straight into the renderer (no CPU unpack) | V³, ResStreamGS (SW) → **nobody yet in HW** | Removes decode/unpack latency | Medium |
+| 12 | Transmission | Hardware path from video-decoder output straight into the renderer (no CPU unpack) | V³, ResStreamGS (SW) → **not found in HW** | Removes decode/unpack latency | Medium |
 | 13 | Transmission | Progressive layered 4D bitstream with on-chip layer selection | 4DGCPro | Adaptive bitrate | Medium |
 | 14 | Transmission | Send residuals only for changed Gaussians (versioned dictionary) | VersionGS, QUEEN, S²GS | 6× storage vs TAD-GS; −85% vs QUEEN | Low (SW) |
 | 15 | Training speed | Freeze converged Gaussians and cache them during streaming per-frame training | ElsaGS (static), DecoGS (SW) | Up to 90% frozen; 20.6× (static, sim) | High |
@@ -720,10 +906,10 @@ Numbers come from different papers, datasets and GPUs; they are comparable only 
 | 19 | Fewer input views | Generative virtual views in angular gaps | arXiv:2610.04606 | +1.12 dB at 6 cameras | High (not edge) |
 | 20 | Input bandwidth | Phase-based alignment of unsynchronised cameras (cheaper capture) | Phase-DGS | up to +6.5 dB unsynced | Medium (SW) |
 | 21 | Quality | Versioned / per-frame states for fast motion | VersionGS | +2.7 dB fast motion | Medium |
-| 22 | Quality | Adaptive-order trajectories (splines / Fourier) evaluated by a variable-latency engine | GaussianSpline, FAST-GS → HW **nobody yet** | Fast-motion quality | Medium |
-| 23 | Edge real-time | Fixed-point / INT16 4DGS datapath with measured quality | LENS (static, board) | 3.9 W board | Low |
+| 22 | Quality | Adaptive-order trajectories (splines / Fourier) evaluated by a variable-latency engine | GaussianSpline, FAST-GS → HW **not found** | Fast-motion quality | Medium |
+| 23 | Edge real-time | Fixed-point / INT16 4DGS datapath with measured quality | LENS (KR260), NYCU sort-free renderer (Alveo U200), GS-Threads (ZCU104) — all static, board | 3.9 W board | Low |
 | 24 | Edge real-time | Foveated + stereo-shared rendering for XR | MetaSapiens, Atlas, Nebula | 1.6× vs GSCore iso-area | Medium |
-| 25 | SLAM | Gradient-reuse pruning and covisibility from the video codec | RTGS, AGS (static SLAM) → dynamic SLAM HW **nobody yet** | 82.5× energy (RTGS, sim) | High |
+| 25 | SLAM | Gradient-reuse pruning and covisibility from the video codec | RTGS, AGS, GauSPU, REACT3D, Splatonic (static SLAM); KAIST 51.2 fps SLAM and mapping chips, SR-VLNA (static map) → dynamic SLAM HW **not found** | 82.5× energy (RTGS, sim) | High |
 
 ## 7. Thesis recommendation
 
@@ -731,17 +917,21 @@ Numbers come from different papers, datasets and GPUs; they are comparable only 
 
 **One sentence:** an accelerator that decides, per Gaussian and per frame, whether its deformed state has changed **before** fetching its parameters or running deformation, reuses deformed 3D state from a camera-independent cache otherwise, and renders the active set — combining directions 1 + 2 + 3 (+ 5 for sorting).
 
-- **Novelty / urgent gap.** CueSplat (Nov 2026) shows skipping deformation is worth 1.75–6.74× on Orin but is software-only. GSPIM (HPCA 2027) shows temporal filtering is 52.4–63.3% of runtime but needs PIM DRAM. DeGS (MICRO 2026) explicitly leaves deformation un-accelerated. No paper in this survey implements per-Gaussian deformation skipping, or a camera-independent cache of deformed state, in hardware. This gap is very recent and two top groups are close to it → move fast.
+- **Novelty / urgent gap (revised after the coverage supplement).** The original claim — "no paper implements per-Gaussian deformation skipping or a camera-independent cache in hardware; no dynamic-4DGS silicon exists" — was based on arXiv only and is **partly wrong**:
+  - **Dynamic-4DGS silicon exists.** Uni4D (12 nm, VLSI 2026) accelerates deformation with a unified engine and cuts EMA by 93.8%; the ISSCC 2026 4DGS processor reuses computation across time (0.24 mJ/frame); Specter (28 nm, VLSI 2026) uses **hash-based deformation detection to skip modeling of non-deformed tiles**.
+  - **Temporal reuse in hardware exists** at other granularities: Relay-GS reuses sort order for 4DGS; Joo et al. (ISCAS 2025) and the Tsinghua ISSCC 2025/JSSC chip keep inter-frame / spatio-temporal Gaussian caches for static scenes.
+  - **What is still not found** (from abstracts; full texts of Specter, Uni4D and the ISSCC 2026 paper must be read to confirm): a renderer that decides **per Gaussian, before fetching its parameters**, whether its deformed state changed, and that reuses **deformed 3D state from a camera-independent cache** for dynamic scenes. CueSplat (software) and GSPIM (PIM, simulation) remain the closest algorithmic evidence.
+  - **Verdict:** change-before-fetch is **still novel but narrower**. It is no longer "the first dynamic-4DGS hardware"; it must be positioned as per-Gaussian, render-path, pre-fetch skipping on top of a Uni4D/Specter-class baseline, and claim gains in DRAM bytes and energy over that baseline. Competition is now concrete: KAIST (Specter) and Tsinghua (Uni4D, ISSCC 2026) already have 4DGS silicon, so the gap can close at VLSI/ISSCC 2027.
 - **Feasibility (2.5-year master's).** Year 1: software trace study + cycle model; Year 1.5: RTL of change-detector, predictor, canonical cache, active-set compaction; Year 2: FPGA demo + tape-out; Year 2.5: measurement and thesis. The datapath is small (polynomial/keyframe deformation is a few MACs per Gaussian), which keeps the block count tape-out-sized.
-- **ASIC path.** FPGA first (lab already has Alveo U200 from the Lai thesis), then a TSMC 16 nm shuttle through TSRI, re-using the lab's 16 nm flow. Silicon goal: measured FPS/W and DRAM bytes on N3DV/Technicolor — no other dynamic-4DGS paper here has measured silicon or board results.
-- **First experiment (4–6 weeks).** On 2 backbones (one MLP/HexPlane, e.g. 4DGaussians or E-D3DGS; one explicit, e.g. Ex4DGS/STG) and N3DV + Technicolor: dump per-Gaussian per-frame deltas; measure (1) fraction of Gaussians whose deformed state changes below a threshold, (2) PSNR vs reuse ratio (reproduce Mobile-4DGS-style curve), (3) hit rate of a post-projection cache vs a canonical-space cache under real camera trajectories, (4) DRAM bytes per frame with filter-before-fetch. Go/no-go: ≥50% reuse at ≤0.2 dB loss.
-- **Risks that would kill it.** (a) CueSplat or GSPIM authors publish a hardware version first (both groups have hardware track records). (b) Reuse ratio collapses on fast-motion content (VersionGS: 1.1–4.0 dB losses on high-motion frames). (c) The field moves to feed-forward or 4D-primitive models where deformation is already cheap, leaving only the memory part (still covered by direction 3). (d) The learned router is too large for a small ASIC — mitigate with a threshold rule (the anchor-sampling study 2603.17227 shows cheap rules can match learned ones).
+- **ASIC path.** FPGA first (lab already has Alveo U200 from the Lai thesis; the NYCU sort-free U200 renderer, TCAS-I 2026, 637.6 FPS at 2.7 W, is the in-lab FPGA baseline), then a TSMC 16 nm shuttle through TSRI, re-using the lab's 16 nm flow. Silicon goal: measured FPS/W and DRAM bytes on N3DV/Technicolor. Measured dynamic-4DGS silicon already exists (Uni4D 0.16–0.52 mJ/frame at 12 nm; Specter 2.67 nJ/pixel at 28 nm), so the claim must be relative gain from change-before-fetch, not absolute efficiency. No measured FPGA board for a dynamic 4DGS renderer was found, so the FPGA demo is itself a reportable result.
+- **First experiment (4–6 weeks).** Week 1: obtain and read the full texts of Specter, Uni4D, the ISSCC 2026 4DGS processor and Relay-GS (IEEE/ACM access via NYCU library); if Specter already skips render-side deformation per Gaussian before fetch, switch to the backup. Then, on 2 backbones (one MLP/HexPlane, e.g. 4DGaussians or E-D3DGS; one explicit, e.g. Ex4DGS/STG) and N3DV + Technicolor: dump per-Gaussian per-frame deltas; measure (1) fraction of Gaussians whose deformed state changes below a threshold, (2) PSNR vs reuse ratio (reproduce Mobile-4DGS-style curve), (3) hit rate of a post-projection cache vs a canonical-space cache under real camera trajectories, (4) DRAM bytes per frame with filter-before-fetch. Go/no-go: ≥50% reuse at ≤0.2 dB loss.
+- **Risks that would kill it.** (a) CueSplat or GSPIM authors, or the Specter (KAIST) / Uni4D (Tsinghua) groups, publish per-Gaussian render-side skipping first — the latter two already have 4DGS silicon. (b) Reuse ratio collapses on fast-motion content (VersionGS: 1.1–4.0 dB losses on high-motion frames). (c) The field moves to feed-forward or 4D-primitive models where deformation is already cheap, leaving only the memory part (still covered by direction 3). (d) The learned router is too large for a small ASIC — mitigate with a threshold rule (the anchor-sampling study 2603.17227 shows cheap rules can match learned ones).
 
 ### Backup: streaming 4DGS decode-and-render engine for mobile XR
 
 **One sentence:** hardware that takes static/dynamic split Gaussian streams (ResStreamGS / V³ style) from a standard video decoder and renders them directly, with versioned/residual updates for changed Gaussians only (directions 12 + 14 + 11).
 
-- **Gap.** Streaming papers are measured on phones (ResStreamGS 30.9 FPS on Snapdragon 778G; V³ phone 27 FPS with 37 ms render) but there is no accelerator for the decode-to-render path. Less competition from architecture groups.
+- **Gap.** Streaming papers are measured on phones (ResStreamGS 30.9 FPS on Snapdragon 778G; V³ phone 27 FPS with 37 ms render) but no accelerator for the decode-to-render path was found, including in the non-arXiv supplement (the measured 4DGS chips take an already-decoded model). Less competition from architecture groups.
 - **Feasibility.** Mostly dataflow + format conversion + a standard renderer; a strong FPGA demo is achievable even if tape-out slips.
 - **ASIC path.** Same 16 nm shuttle; the decoder can be off-chip (commodity) and the chip consumes the 2D attribute planes.
 - **First experiment.** Reproduce V³/ResStreamGS packing on N3DV, profile unpack + render on Jetson, and model on-chip buffers.
